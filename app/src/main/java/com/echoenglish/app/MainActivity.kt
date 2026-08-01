@@ -565,7 +565,7 @@ private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings)
             }
         }
         item { SettingCard("每段重复", RoundedGlyphKind.REPEAT, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
-        item { SettingCard("分段间隔", RoundedGlyphKind.GAP, Color(0xFF287EBC), SkyLight, hint = "每次复读之间和进入下一段前保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
+        item { SettingCard("分段间隔", RoundedGlyphKind.GAP, Color(0xFF287EBC), SkyLight, hint = "仅在同一片段的多次重复之间保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
         item { SettingCard("播放速度", RoundedGlyphKind.SPEED, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
         item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
         item { SettingCard("定时到点", RoundedGlyphKind.BEDTIME, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }

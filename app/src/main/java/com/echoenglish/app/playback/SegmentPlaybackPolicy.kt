@@ -24,6 +24,7 @@ object SegmentPlaybackPolicy {
             else -> SegmentBoundaryAction.COMPLETE
         }
 
+    @Suppress("UNUSED_PARAMETER")
     fun requiresExactBoundary(
         repeatCount: Int,
         segmentGapMs: Long,
@@ -33,9 +34,28 @@ object SegmentPlaybackPolicy {
     ): Boolean =
         skipSubtitleGaps ||
             repeatCount != 1 ||
-            segmentGapMs > 0 ||
             isLastSegment ||
             pendingSleepStop
+
+    fun shouldInsertGap(action: SegmentBoundaryAction, segmentGapMs: Long): Boolean =
+        action == SegmentBoundaryAction.REPEAT_CURRENT && segmentGapMs > 0
+
+    fun canContinueIntoAdjacentNext(
+        repeatCount: Int,
+        repeatIndex: Int,
+        hasNextSegment: Boolean,
+        isAdjacent: Boolean
+    ): Boolean =
+        repeatCount > 0 &&
+            repeatIndex >= repeatCount &&
+            hasNextSegment &&
+            isAdjacent
+
+    fun alignedInitialPosition(
+        requestedPositionMs: Long,
+        segmentStartMs: Long,
+        repeatCount: Int
+    ): Long = if (repeatCount == 1) requestedPositionMs else segmentStartMs
 
     fun normalizedGapMs(value: Long): Long = value.coerceIn(0L, 5_000L)
 }

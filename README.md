@@ -1,38 +1,42 @@
-# 回声英语 v1.6.0
+# 回声英语 v1.7.4
 
-回声英语是一款面向英语重复听读的 Android 应用，支持批量导入 MP3 与 SRT、按固定时长或字幕切分、仅播放字幕片段、分段重复、分段间隔、倍速播放、总进度跳转、媒体通知和锁屏后台播放。
+回声英语是一款面向英语重复听读的 Android 应用，支持持久化播放列表、批量导入 MP3/SRT、按固定时长或字幕分段、仅播放字幕片段、分段重复、重复间隔、倍速播放、总进度与分段跳转、睡眠定时、媒体通知和锁屏后台播放。
 
-## v1.6.0 更新
+## v1.7.4 更新
 
-- 按字幕分段时新增“播放完整时间线 / 仅播放字幕片段”。
-- 仅字幕模式会跳过第一条字幕之前、字幕之间及最后字幕之后的无字幕原音频。
-- 字幕区间会排序、限制到音频时长，过滤空字幕和无效时间。
-- 重叠或首尾相接的字幕区间会合并，避免重复播放同一范围或向后跳转。
-- 仅字幕模式始终启用精确边界，即使重复1次且无分段间隔，也会从当前字幕结尾直接跳到下一字幕开头。
-- 总进度拖动到无字幕区域时，优先定位到后面的下一字幕；最后字幕之后则回到最后字幕片段开头。
-- 字幕范围设置通过 DataStore 持久保存，旧用户默认保持“播放完整时间线”。
-- 设置页所有功能图标已按语义重新分配，不再重复使用日历和列表图标。
-- 睡眠定时入口改为独立的圆角闹钟图标；设置页“定时到点”使用不同的睡眠/月亮图标。
-- 保留 v1.5.0 的系统上一段/下一段、generation token、精确边界和可暂停分段间隔。
+- 固定时长与字幕分段统一规范化，排序、裁剪并消除区间重叠。
+- 重复播放时从分段起点开始，不再把保存的段内进度当作第一遍起点。
+- 同段重复复用已准备的媒体项，避免每遍重新创建 MP3 解码入口。
+- 当前段最后一遍和下一段第一遍使用两个预缓冲的独立裁剪媒体项；设置的静音间隔只用于同段重复。
+- 为 VBR MP3 启用 `Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING` 和 `SeekParameters.EXACT`，提高较后位置和分段边界的准确度。
+- 重复间隔期间保留 mediaPlayback 前台服务，并短时持有 `PARTIAL_WAKE_LOCK`，间隔结束后立即释放。
+- 系统媒体会话使用整条音频的绝对进度，支持系统上一段、下一段和点击通知返回应用。
 
 ## 构建与验证
 
-- versionName：1.6.0
-- versionCode：8
+- versionName：1.7.4
+- versionCode：13
 - minSdk：26
 - targetSdk / compileSdk：34
 - JDK：17
-- 自动测试：51 项全部通过
-- Debug APK：v2 签名验证通过
+- 自动测试：63 项全部通过
+- Debug APK：APK Signature Scheme v2 验证通过
+- 真机：Xiaomi M2102K1C 覆盖安装成功
 
 ## 本地构建
 
 配置 JDK 17 与 Android SDK 后，在项目根目录执行：
 
 ```powershell
-.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest
+.\gradlew.bat --no-daemon --max-workers=1 testDebugUnitTest assembleDebug
+```
+
+如 D8 在依赖合并阶段内存不足，可临时设置：
+
+```powershell
+$env:GRADLE_OPTS='-Xmx4096m -Dfile.encoding=UTF-8'
 ```
 
 APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`。
 
-这是 Debug 测试版本，正式发布前需要使用独立 Release 证书签名。
+这是 Debug 测试版本，正式上架前应使用独立 Release 证书签名。

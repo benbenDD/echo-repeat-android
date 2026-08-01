@@ -24,4 +24,34 @@ class PlaybackServicePolicyTest {
     @Test fun emptyIdleServiceMayStopAfterTaskRemoval() {
         assertFalse(PlaybackServicePolicy.shouldKeepOnTaskRemoved(isPlaying = false, mediaItemCount = 0))
     }
+
+    @Test fun automatedRepeatGapRetainsExistingForegroundService() {
+        assertTrue(
+            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+                startInForegroundRequired = false,
+                playbackTaskActive = true,
+                completed = false,
+                hasSource = true
+            )
+        )
+    }
+
+    @Test fun completedOrUserPausedPlaybackMayLeaveForeground() {
+        assertFalse(
+            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+                startInForegroundRequired = false,
+                playbackTaskActive = false,
+                completed = false,
+                hasSource = true
+            )
+        )
+        assertFalse(
+            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+                startInForegroundRequired = false,
+                playbackTaskActive = true,
+                completed = true,
+                hasSource = true
+            )
+        )
+    }
 }

@@ -2,6 +2,8 @@ package com.echoenglish.app.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -15,12 +17,20 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.PlayerMessage
+import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.echoenglish.app.MainActivity
+import com.echoenglish.app.model.Segment
+import com.echoenglish.app.util.Segmenter
 
+@UnstableApi
 class PlaybackService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var sessionPlayer: Player
@@ -42,11 +52,22 @@ class PlaybackService : MediaSessionService() {
     private var skipSubtitleGaps = false
     private var currentTitle = ""
     private var knownDurationMs = 0L
+    private var sourceUri: Uri? = null
+    private var sourceMediaId = ""
+    private var playbackWindowStartMs = 0L
+    private var playbackWindowEndMs = 0L
+    private var isPipelineClipped = false
+    private var transitionInProgress = false
+    private var queuedAdjacentSegmentIndex: Int? = null
+    private var boundaryHandledGeneration = -1L
+    private var armedBoundaryToken: BoundaryToken? = null
+    private lateinit var gapWakeLock: PowerManager.WakeLock
     private var sleepDeadline = 0L
     private var stopAtSegmentEnd = true
     private var pendingSleepStop = false
     private var completed = false
     private var playbackError = ""
+    private var playbackTaskActive = false
 
     private var scheduleGeneration = 0L
     private var boundaryMessage: PlayerMessage? = null
@@ -61,6 +82,7 @@ class PlaybackService : MediaSessionService() {
         val generation: Long,
         val segmentIndex: Int,
         val repeatIndex: Int,
+        val startMs: Long,
         val endMs: Long
     )
 
@@ -74,9 +96,16 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "PlaybackService created")
+        gapWakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:segment-gap")
+            .apply { setReferenceCounted(false) }
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractorsFactory))
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build().apply {
+                setSeekParameters(SeekParameters.EXACT)
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
@@ -97,17 +126,47 @@ class PlaybackService : MediaSessionService() {
                         publish()
                     }
 
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        val queuedIndex = queuedAdjacentSegmentIndex
+                        if (
+                            reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+                            queuedIndex != null &&
+                            this@PlaybackService.player.currentMediaItemIndex == 1
+                        ) {
+                            transitionInProgress = true
+                            cancelBoundary()
+                            segmentIndex = queuedIndex
+                            repeatIndex = 1
+                            playbackWindowStartMs = starts[queuedIndex]
+                            playbackWindowEndMs = ends[queuedIndex]
+                            queuedAdjacentSegmentIndex = null
+                            transitionInProgress = false
+                            Log.i(
+                                TAG,
+                                "queued transition segment=$segmentIndex repeat=1 " +
+                                    "window=$playbackWindowStartMs..$playbackWindowEndMs"
+                            )
+                            armBoundary()
+                            publish()
+                        }
+                    }
+
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         Log.i(TAG, "playbackState=$playbackState")
-                        if (playbackState == Player.STATE_READY && player.isPlaying) armBoundary()
-                        if (playbackState == Player.STATE_ENDED && !completed && starts.isNotEmpty()) {
-                            completeTrack()
+                        if (
+                            playbackState == Player.STATE_ENDED &&
+                            !completed &&
+                            !transitionInProgress &&
+                            starts.isNotEmpty()
+                        ) {
+                            handlePlaybackWindowEnded()
                         }
                         publish()
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
                         cancelAutomatedWork(clearGap = true)
+                        playbackTaskActive = false
                         playbackError = "播放中断：${error.errorCodeName}"
                         Log.e(TAG, playbackError, error)
                         publish()
@@ -141,13 +200,24 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val keepForegroundForAutomation =
+            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+                startInForegroundRequired = startInForegroundRequired,
+                playbackTaskActive = playbackTaskActive,
+                completed = completed,
+                hasSource = sourceUri != null
+            )
         Log.i(
             TAG,
-            "onUpdateNotification foregroundRequired=$startInForegroundRequired effectivePlaying=${effectiveIsPlaying()} phase=${phaseName()}"
+            "onUpdateNotification foregroundRequired=$startInForegroundRequired " +
+                "effectivePlaying=${effectiveIsPlaying()} phase=${phaseName()} hold=$keepForegroundForAutomation"
         )
+        if (keepForegroundForAutomation) {
+            Log.i(TAG, "foreground notification retained during automated playback")
+            return
+        }
         super.onUpdateNotification(session, startInForegroundRequired)
     }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action ?: "null"} startId=$startId")
         when (intent?.action) {
@@ -209,6 +279,19 @@ class PlaybackService : MediaSessionService() {
         override fun pause() = handlePauseRequest()
         override fun isPlaying(): Boolean = effectiveIsPlaying()
         override fun getPlayWhenReady(): Boolean = effectiveIsPlaying()
+        override fun getCurrentPosition(): Long = absolutePositionMs()
+        override fun getContentPosition(): Long = absolutePositionMs()
+        override fun getDuration(): Long = durationMs()
+        override fun getBufferedPosition(): Long =
+            if (isPipelineClipped) {
+                (playbackWindowStartMs + super.getBufferedPosition())
+                    .coerceAtMost(playbackWindowEndMs)
+            } else {
+                super.getBufferedPosition().coerceAtMost(durationMs())
+            }
+
+        override fun seekTo(positionMs: Long) = seekAbsolute(positionMs)
+        override fun seekTo(mediaItemIndex: Int, positionMs: Long) = seekAbsolute(positionMs)
     }
 
     private fun load(intent: Intent) {
@@ -220,17 +303,25 @@ class PlaybackService : MediaSessionService() {
         }
         cancelAutomatedWork(clearGap = true)
         playbackError = ""
-        starts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: longArrayOf(0)
-        ends = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS) ?: longArrayOf(Long.MAX_VALUE)
-        texts = intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS) ?: emptyArray()
+        sourceUri = uri
+        knownDurationMs = intent.getLongExtra(
+            PlaybackContract.EXTRA_DURATION,
+            0L
+        ).coerceAtLeast(0)
+        val rawStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: longArrayOf(0)
+        val rawEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS)
+            ?: longArrayOf(knownDurationMs)
+        val rawTexts = intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS) ?: emptyArray()
+        if (!applyNormalizedSegments(rawStarts, rawEnds, rawTexts)) {
+            playbackError = "无法播放：没有有效且不重叠的分段"
+            Log.e(TAG, playbackError)
+            publish()
+            return
+        }
         cueStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_STARTS) ?: longArrayOf()
         cueEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_ENDS) ?: longArrayOf()
         cueTexts = intent.getStringArrayExtra(PlaybackContract.EXTRA_CUE_TEXTS) ?: emptyArray()
         rebuildCaches()
-        knownDurationMs = intent.getLongExtra(
-            PlaybackContract.EXTRA_DURATION,
-            ends.lastOrNull() ?: 0
-        ).coerceAtLeast(0)
         repeatCount = intent.getIntExtra(PlaybackContract.EXTRA_REPEATS, 1).coerceAtLeast(0)
         segmentGapMs = SegmentPlaybackPolicy.normalizedGapMs(
             intent.getLongExtra(PlaybackContract.EXTRA_GAP_MS, 0L)
@@ -255,20 +346,63 @@ class PlaybackService : MediaSessionService() {
             PlaybackMath.segmentIndexAt(starts, ends, resolvedPosition)
         } else {
             intent.getIntExtra(PlaybackContract.EXTRA_INDEX, 0)
-                .coerceIn(0, (starts.size - 1).coerceAtLeast(0))
+                .coerceIn(0, starts.lastIndex)
         }
         repeatIndex = 1
         currentTitle = intent.getStringExtra(PlaybackContract.EXTRA_TITLE).orEmpty()
+        sourceMediaId = intent.getStringExtra(PlaybackContract.EXTRA_MEDIA_ID) ?: uri.toString()
         completed = false
         pendingSleepStop = false
-        val startPosition = if (resolvedPosition >= 0) {
+        val requestedStartPosition = if (resolvedPosition >= 0) {
             resolvedPosition
         } else {
-            starts.getOrElse(segmentIndex) { 0 }
+            starts[segmentIndex]
         }
-        val mediaId = intent.getStringExtra(PlaybackContract.EXTRA_MEDIA_ID) ?: uri.toString()
-        val item = MediaItem.Builder()
-            .setMediaId(mediaId)
+        val startPosition = SegmentPlaybackPolicy.alignedInitialPosition(
+            requestedPositionMs = requestedStartPosition,
+            segmentStartMs = starts[segmentIndex],
+            repeatCount = repeatCount
+        )
+        player.setPlaybackSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
+        startPlaybackAt(startPosition, shouldPlay = true)
+        publish()
+    }
+
+    private fun applyNormalizedSegments(
+        rawStarts: LongArray,
+        rawEnds: LongArray,
+        rawTexts: Array<String>
+    ): Boolean {
+        if (rawStarts.isEmpty() || rawStarts.size != rawEnds.size || knownDurationMs <= 0) {
+            return false
+        }
+        val normalized = Segmenter.normalize(
+            rawStarts.indices.map { index ->
+                Segment(
+                    startMs = rawStarts[index],
+                    endMs = rawEnds[index],
+                    text = rawTexts.getOrElse(index) { "" }
+                )
+            },
+            durationMs = knownDurationMs,
+            mergeOverlaps = true
+        )
+        if (normalized.isEmpty()) return false
+        starts = normalized.map(Segment::startMs).toLongArray()
+        ends = normalized.map(Segment::endMs).toLongArray()
+        texts = normalized.map(Segment::text).toTypedArray()
+        Log.i(
+            TAG,
+            "segments normalized input=${rawStarts.size} output=${starts.size} " +
+                "overlapFree=${starts.indices.drop(1).all { ends[it - 1] <= starts[it] }}"
+        )
+        return true
+    }
+
+    private fun buildMediaItem(windowStartMs: Long, windowEndMs: Long): MediaItem {
+        val uri = sourceUri ?: error("Source URI is not loaded")
+        val builder = MediaItem.Builder()
+            .setMediaId(sourceMediaId)
             .setUri(uri)
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -276,28 +410,138 @@ class PlaybackService : MediaSessionService() {
                     .setArtist("回声英语 · 分段复读")
                     .build()
             )
-            .build()
-        player.setMediaItem(item, startPosition)
-        player.setPlaybackSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
+        if (windowStartMs > 0 || windowEndMs < knownDurationMs) {
+            builder.setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(windowStartMs)
+                    .setEndPositionMs(windowEndMs)
+                    .build()
+            )
+        }
+        return builder.build()
+    }
+
+    private fun requiresPipelineClipping(): Boolean =
+        repeatCount != 1 || skipSubtitleGaps
+
+    private fun isAdjacent(currentIndex: Int, nextIndex: Int): Boolean =
+        nextIndex in starts.indices &&
+            kotlin.math.abs(ends[currentIndex] - starts[nextIndex]) <= ADJACENT_TOLERANCE_MS
+
+    private fun adjacentNextForQueue(): Int? {
+        val nextIndex = segmentIndex + 1
+        return nextIndex.takeIf {
+            SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                repeatCount = repeatCount,
+                repeatIndex = repeatIndex,
+                hasNextSegment = nextIndex in starts.indices,
+                isAdjacent = nextIndex in starts.indices && isAdjacent(segmentIndex, nextIndex)
+            )
+        }
+    }
+
+    private fun desiredWindowEndMs(): Long = ends[segmentIndex]
+
+    private fun startPlaybackAt(absolutePositionMs: Long, shouldPlay: Boolean) {
+        if (sourceUri == null || starts.isEmpty()) return
+        transitionInProgress = true
+        cancelBoundary()
+        completed = false
+        val useClip = requiresPipelineClipping()
+        val queuedNext = if (useClip) adjacentNextForQueue() else null
+        queuedAdjacentSegmentIndex = queuedNext
+        playbackWindowStartMs = if (useClip) starts[segmentIndex] else 0L
+        playbackWindowEndMs = if (useClip) desiredWindowEndMs() else knownDurationMs
+        isPipelineClipped = useClip
+        val targetAbsolute = absolutePositionMs.coerceIn(
+            playbackWindowStartMs,
+            playbackWindowEndMs
+        )
+        val itemPosition = if (isPipelineClipped) {
+            targetAbsolute - playbackWindowStartMs
+        } else {
+            targetAbsolute
+        }
+        Log.i(
+            TAG,
+            "window start=$playbackWindowStartMs end=$playbackWindowEndMs " +
+                "target=$targetAbsolute clipped=$isPipelineClipped segment=$segmentIndex " +
+                "repeat=$repeatIndex queuedNext=${queuedNext ?: -1}"
+        )
+        val currentItem = buildMediaItem(playbackWindowStartMs, playbackWindowEndMs)
+        if (queuedNext != null) {
+            player.setMediaItems(
+                listOf(
+                    currentItem,
+                    buildMediaItem(starts[queuedNext], ends[queuedNext])
+                ),
+                0,
+                itemPosition
+            )
+        } else {
+            player.setMediaItem(currentItem, itemPosition)
+        }
         player.prepare()
-        player.play()
-        publish()
+        if (isPipelineClipped) {
+            player.seekTo(0, itemPosition)
+        }
+        playbackTaskActive = shouldPlay
+        if (shouldPlay) player.play() else player.pause()
+        transitionInProgress = false
+    }
+
+    private fun restartCurrentSegment(shouldPlay: Boolean) {
+        if (sourceUri == null || starts.isEmpty()) return
+        val useClip = requiresPipelineClipping()
+        val segmentStart = starts[segmentIndex]
+        val desiredEnd = if (useClip) desiredWindowEndMs() else knownDurationMs
+        val needsQueuedTransition = useClip && adjacentNextForQueue() != null
+        val canReusePreparedWindow =
+            !needsQueuedTransition &&
+            player.currentMediaItem != null &&
+                isPipelineClipped == useClip &&
+                playbackWindowStartMs == segmentStart &&
+                playbackWindowEndMs == desiredEnd
+        if (!canReusePreparedWindow) {
+            startPlaybackAt(starts[segmentIndex], shouldPlay)
+            return
+        }
+
+        transitionInProgress = true
+        cancelBoundary()
+        completed = false
+        val itemPositionMs = if (isPipelineClipped) 0L else segmentStart
+        Log.i(
+            TAG,
+            "window reused start=$playbackWindowStartMs end=$playbackWindowEndMs " +
+                "target=${starts[segmentIndex]} segment=$segmentIndex repeat=$repeatIndex"
+        )
+        player.seekTo(itemPositionMs)
+        playbackTaskActive = shouldPlay
+        if (shouldPlay) player.play() else player.pause()
+        transitionInProgress = false
     }
 
     private fun updateSegments(intent: Intent) {
-        val newStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: return
-        val newEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS) ?: return
-        if (newStarts.isEmpty() || newStarts.size != newEnds.size) return
+        val rawStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: return
+        val rawEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS) ?: return
         val continuePlaying = effectiveIsPlaying()
         val absolute = intent.getLongExtra(
             PlaybackContract.EXTRA_POSITION,
-            player.currentPosition
+            absolutePositionMs()
         ).coerceAtLeast(0)
         cancelAutomatedWork(clearGap = true)
-        starts = newStarts
-        ends = newEnds
-        texts = intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS)
-            ?: Array(starts.size) { "" }
+        if (!applyNormalizedSegments(
+                rawStarts,
+                rawEnds,
+                intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS) ?: emptyArray()
+            )
+        ) {
+            playbackError = "更新分段失败：分段范围无效"
+            Log.e(TAG, playbackError)
+            publish()
+            return
+        }
         skipSubtitleGaps = intent.getBooleanExtra(
             PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
             false
@@ -306,29 +550,36 @@ class PlaybackService : MediaSessionService() {
             starts,
             ends,
             absolute,
-            durationMs(),
+            knownDurationMs,
             skipSubtitleGaps
         )
         segmentIndex = PlaybackMath.segmentIndexAt(starts, ends, target)
         repeatIndex = 1
         completed = false
         rebuildCaches()
-        player.seekTo(target)
-        if (continuePlaying) player.play() else player.pause()
-        if (continuePlaying) armBoundary()
+        val alignedTarget = SegmentPlaybackPolicy.alignedInitialPosition(
+            requestedPositionMs = target,
+            segmentStartMs = starts[segmentIndex],
+            repeatCount = repeatCount
+        )
+        startPlaybackAt(alignedTarget, continuePlaying)
         publish()
     }
 
     private fun updateRepeats(value: Int) {
         val continuePlaying = effectiveIsPlaying()
         val wasInGap = isInSegmentGap
+        val absolute = if (wasInGap) starts.getOrElse(segmentIndex) { 0L } else absolutePositionMs()
         cancelAutomatedWork(clearGap = true)
         repeatCount = value.coerceAtLeast(0)
         repeatIndex = 1
         completed = false
-        if (wasInGap && starts.isNotEmpty()) player.seekTo(starts[segmentIndex])
-        if (continuePlaying) player.play() else player.pause()
-        if (continuePlaying) armBoundary()
+        val alignedPosition = SegmentPlaybackPolicy.alignedInitialPosition(
+            requestedPositionMs = absolute,
+            segmentStartMs = starts[segmentIndex],
+            repeatCount = repeatCount
+        )
+        startPlaybackAt(alignedPosition, continuePlaying)
         publish()
     }
 
@@ -336,33 +587,24 @@ class PlaybackService : MediaSessionService() {
         val newGap = SegmentPlaybackPolicy.normalizedGapMs(value)
         if (!isInSegmentGap) {
             segmentGapMs = newGap
-            armBoundary()
             publish()
             return
         }
-        val action = pendingGapAction
         val shouldContinue = !isSegmentGapPaused
         cancelAutomatedWork(clearGap = true)
         segmentGapMs = newGap
-        if (action != null) {
-            if (newGap == 0L) {
-                executeBoundaryAction(action)
-            } else {
-                beginGap(action, paused = !shouldContinue)
-            }
+        if (newGap == 0L) {
+            executeBoundaryAction(SegmentBoundaryAction.REPEAT_CURRENT)
+        } else {
+            beginGap(SegmentBoundaryAction.REPEAT_CURRENT, paused = !shouldContinue)
         }
         publish()
     }
 
     private fun updateSpeed(value: Float) {
-        boundaryMessage?.cancel()
-        boundaryMessage = null
-        scheduleGeneration++
         player.setPlaybackSpeed(value.coerceIn(0.25f, 3f))
-        if (player.isPlaying) armBoundary()
         publish()
     }
-
     private fun tick() {
         handleSleepTimer()
         if (isInSegmentGap && !isSegmentGapPaused) {
@@ -370,29 +612,23 @@ class PlaybackService : MediaSessionService() {
                 (gapDeadlineElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0)
         }
         if (player.isPlaying && !isInSegmentGap && ends.isNotEmpty()) {
-            val position = player.currentPosition
-            val exactBoundary = SegmentPlaybackPolicy.requiresExactBoundary(
-                repeatCount,
-                segmentGapMs,
-                segmentIndex == starts.lastIndex,
-                pendingSleepStop,
-                skipSubtitleGaps
-            )
-            if (!exactBoundary) {
+            val position = absolutePositionMs()
+            if (!isPipelineClipped) {
                 val naturalIndex = PlaybackMath.segmentIndexAt(starts, ends, position)
                 if (naturalIndex != segmentIndex) {
                     segmentIndex = naturalIndex
                     repeatIndex = 1
-                    armBoundary()
                 }
-            } else if (position >= ends[segmentIndex] && boundaryMessage == null) {
-                val token = BoundaryToken(
-                    scheduleGeneration,
-                    segmentIndex,
-                    repeatIndex,
-                    ends[segmentIndex]
-                )
-                onSegmentBoundary(token)
+            } else {
+                val token = armedBoundaryToken
+                if (
+                    token != null &&
+                    boundaryMessage == null &&
+                    boundaryHandledGeneration != token.generation &&
+                    position >= token.endMs
+                ) {
+                    onSegmentBoundary(token)
+                }
             }
         }
         publish()
@@ -411,29 +647,62 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun stopForSleepTimer() {
+        playbackTaskActive = false
         cancelAutomatedWork(clearGap = true)
         player.pause()
         pendingSleepStop = false
         clearTimer()
     }
 
-    private fun armBoundary() {
+    private fun cancelBoundary() {
+        scheduleGeneration++
         boundaryMessage?.cancel()
         boundaryMessage = null
-        if (!player.isPlaying || isInSegmentGap || starts.isEmpty() || ends.isEmpty()) return
-        val needsBoundary = SegmentPlaybackPolicy.requiresExactBoundary(
-            repeatCount,
-            segmentGapMs,
-            segmentIndex == starts.lastIndex,
-            pendingSleepStop,
-            skipSubtitleGaps
-        )
-        if (!needsBoundary) return
+        armedBoundaryToken = null
+    }
 
-        val knownEnd = durationMs().takeIf { it > 0 } ?: ends[segmentIndex]
-        val endMs = ends[segmentIndex].coerceAtMost(knownEnd)
-        val token = BoundaryToken(++scheduleGeneration, segmentIndex, repeatIndex, endMs)
-        if (player.currentPosition >= endMs) {
+    private fun armBoundary() {
+        if (
+            !player.isPlaying ||
+            transitionInProgress ||
+            isInSegmentGap ||
+            starts.isEmpty() ||
+            ends.isEmpty()
+        ) {
+            return
+        }
+        val endMs = ends[segmentIndex].coerceAtMost(knownDurationMs)
+        val crossesIntoFollowingSegment =
+            isPipelineClipped && playbackWindowEndMs > endMs + ADJACENT_TOLERANCE_MS
+        if (!crossesIntoFollowingSegment && !pendingSleepStop) return
+
+        val existing = armedBoundaryToken
+        if (
+            existing != null &&
+            existing.segmentIndex == segmentIndex &&
+            existing.repeatIndex == repeatIndex &&
+            existing.startMs == starts[segmentIndex] &&
+            existing.endMs == endMs &&
+            boundaryHandledGeneration != existing.generation
+        ) {
+            return
+        }
+
+        cancelBoundary()
+        val token = BoundaryToken(
+            generation = scheduleGeneration,
+            segmentIndex = segmentIndex,
+            repeatIndex = repeatIndex,
+            startMs = starts[segmentIndex],
+            endMs = endMs
+        )
+        armedBoundaryToken = token
+        val itemPositionMs = if (isPipelineClipped) {
+            (endMs - playbackWindowStartMs).coerceAtLeast(0)
+        } else {
+            endMs
+        }
+        if (player.currentPosition >= itemPositionMs) {
             handler.post { onSegmentBoundary(token) }
             return
         }
@@ -442,33 +711,43 @@ class PlaybackService : MediaSessionService() {
         }
             .setLooper(Looper.getMainLooper())
             .setPayload(token)
-            .setPosition(endMs)
+            .setPosition(itemPositionMs)
             .setDeleteAfterDelivery(true)
             .send()
         Log.d(
             TAG,
-            "boundary armed token=${token.generation} segment=${token.segmentIndex} repeat=${token.repeatIndex} end=$endMs"
+            "boundary armed generation=${token.generation} segment=${token.segmentIndex} " +
+                "repeat=${token.repeatIndex} start=${token.startMs} end=${token.endMs}"
         )
     }
 
     private fun onSegmentBoundary(token: BoundaryToken) {
+        val currentToken = armedBoundaryToken
         if (
+            currentToken != token ||
             token.generation != scheduleGeneration ||
+            boundaryHandledGeneration == token.generation ||
             token.segmentIndex != segmentIndex ||
-            token.repeatIndex != repeatIndex ||
-            token.endMs != ends.getOrElse(segmentIndex) { -1L }
-                .coerceAtMost(durationMs().takeIf { it > 0 } ?: Long.MAX_VALUE)
+            token.repeatIndex != repeatIndex
         ) {
             Log.d(
                 TAG,
-                "stale boundary ignored token=$token currentGeneration=$scheduleGeneration segment=$segmentIndex repeat=$repeatIndex"
+                "stale boundary ignored token=$token current=$currentToken " +
+                    "generation=$scheduleGeneration handled=$boundaryHandledGeneration"
             )
             return
         }
         boundaryMessage = null
+        armedBoundaryToken = null
+        boundaryHandledGeneration = token.generation
+        val actual = absolutePositionMs()
+        Log.i(
+            TAG,
+            "boundary handled generation=${token.generation} expectedStart=${token.startMs} " +
+                "expectedEnd=${token.endMs} actual=$actual lateness=${actual - token.endMs}"
+        )
         if (pendingSleepStop) {
             player.pause()
-            player.seekTo(token.endMs)
             pendingSleepStop = false
             clearTimer()
             publish()
@@ -480,36 +759,87 @@ class PlaybackService : MediaSessionService() {
             repeatIndex,
             segmentIndex == starts.lastIndex
         )
-        if (action != SegmentBoundaryAction.COMPLETE && segmentGapMs > 0) {
-            // Enter the gap before pausing the delegate so MediaSession still reports
-            // an active playback operation and keeps its media notification foreground.
+        if (action != SegmentBoundaryAction.NEXT_SEGMENT) {
+            Log.w(TAG, "unexpected in-window boundary action=$action")
+            return
+        }
+        segmentIndex++
+        repeatIndex = 1
+        completed = false
+        armBoundary()
+        publish()
+    }
+
+    private fun handlePlaybackWindowEnded() {
+        if (transitionInProgress || completed || starts.isEmpty()) return
+        cancelBoundary()
+
+        while (
+            segmentIndex < starts.lastIndex &&
+            ends[segmentIndex] < playbackWindowEndMs - ADJACENT_TOLERANCE_MS &&
+            isAdjacent(segmentIndex, segmentIndex + 1)
+        ) {
+            segmentIndex++
+            repeatIndex = 1
+        }
+
+        Log.i(
+            TAG,
+            "window ended start=$playbackWindowStartMs end=$playbackWindowEndMs " +
+                "segment=$segmentIndex repeat=$repeatIndex absolute=${absolutePositionMs()}"
+        )
+        if (pendingSleepStop) {
+            pendingSleepStop = false
+            clearTimer()
+            completeTrack()
+            return
+        }
+
+        val action = SegmentPlaybackPolicy.boundaryAction(
+            repeatCount,
+            repeatIndex,
+            segmentIndex == starts.lastIndex
+        )
+        if (SegmentPlaybackPolicy.shouldInsertGap(action, segmentGapMs)) {
             beginGap(action)
-            player.pause()
-            player.seekTo(token.endMs)
         } else {
-            player.pause()
-            player.seekTo(token.endMs)
             executeBoundaryAction(action)
         }
     }
 
     private fun beginGap(action: SegmentBoundaryAction, paused: Boolean = false) {
-        boundaryMessage?.cancel()
-        boundaryMessage = null
+        require(action == SegmentBoundaryAction.REPEAT_CURRENT) {
+            "Configured gaps are only valid between repeats of the same segment"
+        }
+        cancelBoundary()
         gapRunnable?.let(handler::removeCallbacks)
         gapRunnable = null
-        scheduleGeneration++
         isInSegmentGap = true
         isSegmentGapPaused = paused
+        playbackTaskActive = !paused
         pendingGapAction = action
         segmentGapRemainingMs = segmentGapMs
         gapDeadlineElapsedMs = SystemClock.elapsedRealtime() + segmentGapRemainingMs
-        if (!paused) scheduleGapCompletion(scheduleGeneration)
+        if (!paused) {
+            acquireGapWakeLock()
+            scheduleGapCompletion(scheduleGeneration)
+        }
         Log.d(
             TAG,
-            "gap started generation=$scheduleGeneration duration=$segmentGapMs action=$action paused=$paused"
+            "gap started generation=$scheduleGeneration duration=$segmentGapMs " +
+                "action=$action paused=$paused wake=${gapWakeLock.isHeld}"
         )
         publish()
+    }
+
+    private fun acquireGapWakeLock() {
+        if (!gapWakeLock.isHeld) {
+            gapWakeLock.acquire(MAX_GAP_WAKE_LOCK_MS)
+        }
+    }
+
+    private fun releaseGapWakeLock() {
+        if (gapWakeLock.isHeld) gapWakeLock.release()
     }
 
     private fun scheduleGapCompletion(token: Long) {
@@ -524,10 +854,9 @@ class PlaybackService : MediaSessionService() {
             Log.d(TAG, "stale gap ignored token=$token currentGeneration=$scheduleGeneration")
             return
         }
-        val action = pendingGapAction ?: return
         gapRunnable = null
         clearGapState()
-        executeBoundaryAction(action)
+        executeBoundaryAction(SegmentBoundaryAction.REPEAT_CURRENT)
     }
 
     private fun executeBoundaryAction(action: SegmentBoundaryAction) {
@@ -536,17 +865,13 @@ class PlaybackService : MediaSessionService() {
             SegmentBoundaryAction.REPEAT_CURRENT -> {
                 repeatIndex++
                 completed = false
-                player.seekTo(starts[segmentIndex])
-                player.play()
-                armBoundary()
+                restartCurrentSegment(shouldPlay = true)
             }
             SegmentBoundaryAction.NEXT_SEGMENT -> {
                 segmentIndex = (segmentIndex + 1).coerceAtMost(starts.lastIndex)
                 repeatIndex = 1
                 completed = false
-                player.seekTo(starts[segmentIndex])
-                player.play()
-                armBoundary()
+                startPlaybackAt(starts[segmentIndex], shouldPlay = true)
             }
             SegmentBoundaryAction.COMPLETE -> completeTrack()
         }
@@ -554,21 +879,18 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun completeTrack() {
+        playbackTaskActive = false
         cancelAutomatedWork(clearGap = true)
         completed = true
         player.pause()
-        if (ends.isNotEmpty()) {
-            player.seekTo(ends[segmentIndex].coerceAtMost(durationMs()))
-        }
         publish()
     }
-
     private fun previousSegment() {
         if (starts.isEmpty()) return
         val positionInSegment = if (isInSegmentGap) {
             (ends[segmentIndex] - starts[segmentIndex]).coerceAtLeast(0)
         } else {
-            (player.currentPosition - starts[segmentIndex]).coerceAtLeast(0)
+            (absolutePositionMs() - starts[segmentIndex]).coerceAtLeast(0)
         }
         val target = SegmentPlaybackPolicy.previousTargetIndex(segmentIndex, positionInSegment)
         moveTo(target)
@@ -586,9 +908,7 @@ class PlaybackService : MediaSessionService() {
         segmentIndex = index.coerceIn(0, starts.lastIndex)
         repeatIndex = 1
         completed = false
-        player.seekTo(starts[segmentIndex])
-        if (continuePlaying) player.play() else player.pause()
-        if (continuePlaying) armBoundary()
+        startPlaybackAt(starts[segmentIndex], continuePlaying)
         publish()
     }
 
@@ -598,12 +918,9 @@ class PlaybackService : MediaSessionService() {
         cancelAutomatedWork(clearGap = true)
         repeatIndex = 1
         completed = false
-        player.seekTo(
-            (starts[segmentIndex] + relativeMs)
-                .coerceIn(starts[segmentIndex], ends[segmentIndex])
-        )
-        if (continuePlaying) player.play() else player.pause()
-        if (continuePlaying) armBoundary()
+        val target = (starts[segmentIndex] + relativeMs)
+            .coerceIn(starts[segmentIndex], ends[segmentIndex])
+        startPlaybackAt(target, continuePlaying)
         publish()
     }
 
@@ -615,15 +932,13 @@ class PlaybackService : MediaSessionService() {
             starts,
             ends,
             positionMs,
-            durationMs(),
+            knownDurationMs,
             skipSubtitleGaps
         )
         segmentIndex = PlaybackMath.segmentIndexAt(starts, ends, target)
         repeatIndex = 1
         completed = false
-        player.seekTo(target)
-        if (continuePlaying) player.play() else player.pause()
-        if (continuePlaying) armBoundary()
+        startPlaybackAt(target, continuePlaying)
         publish()
     }
 
@@ -631,8 +946,14 @@ class PlaybackService : MediaSessionService() {
         if (isInSegmentGap) {
             if (isSegmentGapPaused) resumeGap() else pauseGap()
         } else if (player.isPlaying) {
+            playbackTaskActive = false
             player.pause()
+        } else if (completed || player.playbackState == Player.STATE_ENDED) {
+            repeatIndex = 1
+            completed = false
+            startPlaybackAt(starts.getOrElse(segmentIndex) { 0L }, shouldPlay = true)
         } else {
+            playbackTaskActive = true
             player.play()
             armBoundary()
         }
@@ -640,8 +961,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePlayRequest() {
+        playbackTaskActive = true
         if (isInSegmentGap) {
             if (isSegmentGapPaused) resumeGap()
+        } else if (completed || player.playbackState == Player.STATE_ENDED) {
+            repeatIndex = 1
+            completed = false
+            startPlaybackAt(starts.getOrElse(segmentIndex) { 0L }, shouldPlay = true)
         } else {
             player.play()
             armBoundary()
@@ -650,6 +976,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePauseRequest() {
+        playbackTaskActive = false
         if (isInSegmentGap) pauseGap() else player.pause()
         publish()
     }
@@ -661,31 +988,38 @@ class PlaybackService : MediaSessionService() {
         gapRunnable?.let(handler::removeCallbacks)
         gapRunnable = null
         isSegmentGapPaused = true
+        playbackTaskActive = false
         scheduleGeneration++
+        releaseGapWakeLock()
         Log.d(TAG, "gap paused remaining=$segmentGapRemainingMs")
     }
 
     private fun resumeGap() {
         if (!isInSegmentGap || !isSegmentGapPaused) return
         isSegmentGapPaused = false
+        playbackTaskActive = true
         val token = ++scheduleGeneration
+        acquireGapWakeLock()
         scheduleGapCompletion(token)
-        Log.d(TAG, "gap resumed generation=$token remaining=$segmentGapRemainingMs")
+        Log.d(
+            TAG,
+            "gap resumed generation=$token remaining=$segmentGapRemainingMs wake=${gapWakeLock.isHeld}"
+        )
     }
 
     private fun effectiveIsPlaying(): Boolean =
         player.isPlaying || (isInSegmentGap && !isSegmentGapPaused)
 
     private fun cancelAutomatedWork(clearGap: Boolean) {
-        scheduleGeneration++
-        boundaryMessage?.cancel()
-        boundaryMessage = null
+        cancelBoundary()
         gapRunnable?.let(handler::removeCallbacks)
         gapRunnable = null
+        transitionInProgress = false
         if (clearGap) clearGapState()
     }
 
     private fun clearGapState() {
+        releaseGapWakeLock()
         isInSegmentGap = false
         isSegmentGapPaused = false
         segmentGapRemainingMs = 0L
@@ -693,6 +1027,14 @@ class PlaybackService : MediaSessionService() {
         pendingGapAction = null
     }
 
+    private fun absolutePositionMs(): Long {
+        val itemPosition = player.currentPosition.coerceAtLeast(0)
+        return if (isPipelineClipped) {
+            (playbackWindowStartMs + itemPosition).coerceAtMost(playbackWindowEndMs)
+        } else {
+            itemPosition.coerceAtMost(knownDurationMs)
+        }
+    }
     private fun rebuildCaches() {
         segmentCache = starts.indices.map {
             SegmentSnapshot(
@@ -712,8 +1054,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    private fun durationMs(): Long =
-        player.duration.takeIf { it > 0 } ?: knownDurationMs.coerceAtLeast(0)
+    private fun durationMs(): Long = knownDurationMs.coerceAtLeast(0)
 
     private fun setTimer(intent: Intent) {
         val minutes = intent.getIntExtra(PlaybackContract.EXTRA_TIMER_MINUTES, 0)
@@ -740,7 +1081,7 @@ class PlaybackService : MediaSessionService() {
     private fun publish() {
         val start = starts.getOrElse(segmentIndex) { 0 }
         val end = ends.getOrElse(segmentIndex) { durationMs() }
-        val position = player.currentPosition.coerceAtLeast(0)
+        val position = absolutePositionMs()
         val subtitlePosition = if (isInSegmentGap) {
             (end - 1).coerceAtLeast(start)
         } else {
@@ -805,10 +1146,12 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         Log.i(
             TAG,
-            "PlaybackService destroyed effectivePlaying=${effectiveIsPlaying()} state=${player.playbackState}"
+            "PlaybackService destroyed effectivePlaying=${effectiveIsPlaying()} " +
+                "state=${player.playbackState} gapWakeHeld=${gapWakeLock.isHeld}"
         )
         handler.removeCallbacksAndMessages(null)
-        boundaryMessage?.cancel()
+        cancelBoundary()
+        releaseGapWakeLock()
         session.release()
         player.release()
         super.onDestroy()
@@ -817,5 +1160,7 @@ class PlaybackService : MediaSessionService() {
     companion object {
         private const val TAG = "EchoPlayback"
         private const val TICK_MS = 80L
+        private const val ADJACENT_TOLERANCE_MS = 2L
+        private const val MAX_GAP_WAKE_LOCK_MS = 10_000L
     }
 }

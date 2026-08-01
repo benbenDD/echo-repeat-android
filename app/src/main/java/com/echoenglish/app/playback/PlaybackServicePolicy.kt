@@ -5,4 +5,12 @@ object PlaybackServicePolicy {
 
     fun shouldKeepOnTaskRemoved(isPlaying: Boolean, mediaItemCount: Int): Boolean =
         isPlaying || mediaItemCount > 0
+
+    fun shouldRetainForegroundDuringAutomation(
+        startInForegroundRequired: Boolean,
+        playbackTaskActive: Boolean,
+        completed: Boolean,
+        hasSource: Boolean
+    ): Boolean =
+        !startInForegroundRequired && playbackTaskActive && !completed && hasSource
 }

@@ -57,9 +57,9 @@ class SegmentPlaybackPolicyTest {
         )
     }
 
-    @Test fun repeatsGapLastSegmentAndSleepTimerRequireExactBoundary() {
+    @Test fun repeatsLastSegmentAndSleepTimerRequireExactBoundary() {
         assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(3, 0, false, false))
-        assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(1, 500, false, false))
+        assertFalse(SegmentPlaybackPolicy.requiresExactBoundary(1, 500, false, false))
         assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(1, 0, true, false))
         assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(1, 0, false, true))
     }
@@ -89,5 +89,94 @@ class SegmentPlaybackPolicyTest {
         val starts = longArrayOf(0, 5_000, 10_000)
         val ends = longArrayOf(5_000, 10_000, 15_000)
         assertTrue((0 until ends.lastIndex).all { ends[it] <= starts[it + 1] })
+    }
+
+    @Test fun repeatedLoadStartsAtExactSegmentBoundary() {
+        assertEquals(
+            1_635_000L,
+            SegmentPlaybackPolicy.alignedInitialPosition(
+                requestedPositionMs = 1_638_578L,
+                segmentStartMs = 1_635_000L,
+                repeatCount = 5
+            )
+        )
+        assertEquals(
+            1_635_000L,
+            SegmentPlaybackPolicy.alignedInitialPosition(
+                requestedPositionMs = 1_638_578L,
+                segmentStartMs = 1_635_000L,
+                repeatCount = 0
+            )
+        )
+    }
+
+    @Test fun singlePassMayResumeInsideSegment() {
+        assertEquals(
+            1_638_578L,
+            SegmentPlaybackPolicy.alignedInitialPosition(
+                requestedPositionMs = 1_638_578L,
+                segmentStartMs = 1_635_000L,
+                repeatCount = 1
+            )
+        )
+    }
+
+    @Test fun configuredGapOnlyAppliesBetweenRepeatsOfSameSegment() {
+        assertTrue(
+            SegmentPlaybackPolicy.shouldInsertGap(
+                SegmentBoundaryAction.REPEAT_CURRENT,
+                1_000
+            )
+        )
+        assertFalse(
+            SegmentPlaybackPolicy.shouldInsertGap(
+                SegmentBoundaryAction.NEXT_SEGMENT,
+                1_000
+            )
+        )
+        assertFalse(
+            SegmentPlaybackPolicy.shouldInsertGap(
+                SegmentBoundaryAction.COMPLETE,
+                1_000
+            )
+        )
+    }
+
+    @Test fun finalRepeatCanContinueIntoAdjacentNextSegment() {
+        assertTrue(
+            SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                repeatCount = 5,
+                repeatIndex = 5,
+                hasNextSegment = true,
+                isAdjacent = true
+            )
+        )
+        assertFalse(
+            SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                repeatCount = 5,
+                repeatIndex = 4,
+                hasNextSegment = true,
+                isAdjacent = true
+            )
+        )
+        assertFalse(
+            SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                repeatCount = 5,
+                repeatIndex = 5,
+                hasNextSegment = true,
+                isAdjacent = false
+            )
+        )
+    }
+
+    @Test fun infiniteRepeatNeverContinuesIntoNextSegment() {
+        assertFalse(
+            SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                repeatCount = 0,
+                repeatIndex = 99,
+                hasNextSegment = true,
+                isAdjacent = true
+            )
+        )
     }
 }
