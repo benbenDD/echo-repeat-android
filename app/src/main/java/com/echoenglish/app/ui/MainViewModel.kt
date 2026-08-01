@@ -1,8 +1,9 @@
-﻿package com.echoenglish.app.ui
+package com.echoenglish.app.ui
 
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.echoenglish.app.EchoEnglishApp
@@ -16,6 +17,7 @@ import com.echoenglish.app.model.SrtCue
 import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackService
+import com.echoenglish.app.playback.PlaybackServicePolicy
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
 import kotlinx.coroutines.delay
@@ -40,11 +42,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentCues: List<SrtCue> = emptyList()
     private var currentSegments: List<Segment> = emptyList()
     private var completionHandled = false
+    private var lastPlaybackError = ""
 
     init {
         viewModelScope.launch { app.settingsRepository.settings.collect { mutableSettings.value = it } }
         viewModelScope.launch {
             playback.collect { state ->
+                if (state.errorMessage.isNotBlank() && state.errorMessage != lastPlaybackError) {
+                    lastPlaybackError = state.errorMessage
+                    mutableMessage.value = state.errorMessage
+                } else if (state.errorMessage.isBlank()) {
+                    lastPlaybackError = ""
+                }
                 if (state.completed && !completionHandled) {
                     completionHandled = true
                     persistProgress(true)
@@ -71,6 +80,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         importUris(library.collectTree(uri))
     }
 
+    private fun sendService(intent: Intent) {
+        if (PlaybackServicePolicy.requiresForegroundStart(intent.action)) {
+            ContextCompat.startForegroundService(app, intent)
+        } else {
+            app.startService(intent)
+        }
+    }
+
     fun openTrack(track: TrackEntity) = viewModelScope.launch {
         val activeSettings = mutableSettings.value
         currentCues = readCues(track)
@@ -82,9 +99,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableCurrent.value = track
         app.settingsRepository.saveLastTrack(track.id)
         val targetSegment = track.currentSegment.coerceIn(0, currentSegments.lastIndex)
-        app.startService(Intent(app, PlaybackService::class.java).apply {
+        sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_LOAD
             putExtra(PlaybackContract.EXTRA_URI, track.audioUri)
+            putExtra(PlaybackContract.EXTRA_MEDIA_ID, track.id.toString())
             putExtra(PlaybackContract.EXTRA_TITLE, track.title)
             putExtra(PlaybackContract.EXTRA_DURATION, track.durationMs)
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
@@ -101,7 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun command(action: String, position: Long? = null) {
-        app.startService(Intent(app, PlaybackService::class.java).apply {
+        sendService(Intent(app, PlaybackService::class.java).apply {
             this.action = action
             position?.let { putExtra(PlaybackContract.EXTRA_POSITION, it) }
         })
@@ -110,7 +128,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun seekAbsolute(positionMs: Long) = command(PlaybackContract.ACTION_SEEK_ABSOLUTE, positionMs)
 
     fun seekToSegment(index: Int) {
-        app.startService(Intent(app, PlaybackService::class.java).apply {
+        sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_SEEK_SEGMENT
             putExtra(PlaybackContract.EXTRA_INDEX, index)
         })
@@ -135,13 +153,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             rebuildActiveSegments(value)
         }
         if (previous.repeatCount != value.repeatCount) {
-            app.startService(Intent(app, PlaybackService::class.java).apply {
+            sendService(Intent(app, PlaybackService::class.java).apply {
                 action = PlaybackContract.ACTION_UPDATE_REPEATS
                 putExtra(PlaybackContract.EXTRA_REPEATS, value.repeatCount)
             })
         }
         if (previous.speed != value.speed) {
-            app.startService(Intent(app, PlaybackService::class.java).apply {
+            sendService(Intent(app, PlaybackService::class.java).apply {
                 action = PlaybackContract.ACTION_UPDATE_SPEED
                 putExtra(PlaybackContract.EXTRA_SPEED, value.speed)
             })
@@ -159,7 +177,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         currentSegments = buildSegments(value, track.durationMs)
         if (currentSegments.isEmpty()) return
-        app.startService(Intent(app, PlaybackService::class.java).apply {
+        sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_UPDATE_SEGMENTS
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
@@ -183,7 +201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }.orEmpty()
 
     fun setSleepTimer(minutes: Int) {
-        app.startService(Intent(app, PlaybackService::class.java).apply {
+        sendService(Intent(app, PlaybackService::class.java).apply {
             action = if (minutes <= 0) PlaybackContract.ACTION_CANCEL_TIMER else PlaybackContract.ACTION_TIMER
             putExtra(PlaybackContract.EXTRA_TIMER_MINUTES, minutes)
             putExtra(PlaybackContract.EXTRA_STOP_AT_END, mutableSettings.value.stopAtSegmentEnd)

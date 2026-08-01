@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.playback
+package com.echoenglish.app.playback
 
 object PlaybackContract {
     const val ACTION_LOAD = "com.echoenglish.LOAD"
@@ -15,6 +15,7 @@ object PlaybackContract {
     const val ACTION_TIMER = "com.echoenglish.TIMER"
     const val ACTION_CANCEL_TIMER = "com.echoenglish.CANCEL_TIMER"
     const val EXTRA_URI = "uri"
+    const val EXTRA_MEDIA_ID = "media_id"
     const val EXTRA_TITLE = "title"
     const val EXTRA_STARTS = "starts"
     const val EXTRA_ENDS = "ends"

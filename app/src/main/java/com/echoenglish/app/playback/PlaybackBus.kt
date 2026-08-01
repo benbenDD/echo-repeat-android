@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.playback
+package com.echoenglish.app.playback
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +24,8 @@ data class PlaybackSnapshot(
     val segments: List<SegmentSnapshot> = emptyList(),
     val subtitles: List<SubtitleSnapshot> = emptyList(),
     val sleepDeadlineMs: Long = 0,
-    val completed: Boolean = false
+    val completed: Boolean = false,
+    val errorMessage: String = ""
 ) {
     val segmentPositionMs: Long get() = (positionMs - segmentStartMs).coerceAtLeast(0)
     val segmentDurationMs: Long get() = (segmentEndMs - segmentStartMs).coerceAtLeast(0)

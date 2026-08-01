@@ -3,11 +3,13 @@ package com.echoenglish.app.playback
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -34,6 +36,7 @@ class PlaybackService : MediaSessionService() {
     private var stopAtSegmentEnd = true
     private var pendingSleepStop = false
     private var completed = false
+    private var playbackError = ""
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -44,13 +47,29 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        player = ExoPlayer.Builder(this).build().apply {
+        Log.i(TAG, "PlaybackService created")
+        player = ExoPlayer.Builder(this)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
+            .build().apply {
             setAudioAttributes(AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).setUsage(C.USAGE_MEDIA).build(), true)
             setHandleAudioBecomingNoisy(true)
             addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) = publish()
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    Log.i(TAG, "isPlaying=$isPlaying state=$playbackState")
+                    publish()
+                }
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    Log.i(TAG, "playWhenReady=$playWhenReady reason=$reason")
+                    publish()
+                }
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    Log.i(TAG, "playbackState=$playbackState")
                     if (playbackState == Player.STATE_ENDED) completed = true
+                    publish()
+                }
+                override fun onPlayerError(error: PlaybackException) {
+                    playbackError = "播放中断：${error.errorCodeName}"
+                    Log.e(TAG, playbackError, error)
                     publish()
                 }
             })
@@ -65,6 +84,7 @@ class PlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = session
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand action=${intent?.action ?: "null"} startId=$startId")
         when (intent?.action) {
             PlaybackContract.ACTION_LOAD -> load(intent)
             PlaybackContract.ACTION_TOGGLE -> if (player.isPlaying) player.pause() else player.play()
@@ -84,7 +104,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun load(intent: Intent) {
-        val uri = intent.getStringExtra(PlaybackContract.EXTRA_URI)?.toUri() ?: return
+        val uri = intent.getStringExtra(PlaybackContract.EXTRA_URI)?.toUri() ?: run {
+            playbackError = "无法播放：音频地址为空"
+            Log.e(TAG, playbackError)
+            publish()
+            return
+        }
+        playbackError = ""
         starts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: longArrayOf(0)
         ends = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS) ?: longArrayOf(Long.MAX_VALUE)
         texts = intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS) ?: emptyArray()
@@ -101,7 +127,8 @@ class PlaybackService : MediaSessionService() {
         currentTitle = intent.getStringExtra(PlaybackContract.EXTRA_TITLE).orEmpty()
         completed = false
         val startPosition = if (requestedPosition >= 0) requestedPosition.coerceIn(0, knownDurationMs.coerceAtLeast(0)) else starts.getOrElse(segmentIndex) { 0 }
-        val item = MediaItem.Builder().setUri(uri)
+        val mediaId = intent.getStringExtra(PlaybackContract.EXTRA_MEDIA_ID) ?: uri.toString()
+        val item = MediaItem.Builder().setMediaId(mediaId).setUri(uri)
             .setMediaMetadata(MediaMetadata.Builder().setTitle(currentTitle).setArtist("回声英语 · 分段复读").build())
             .build()
         player.setMediaItem(item, startPosition)
@@ -260,15 +287,26 @@ class PlaybackService : MediaSessionService() {
             segments = segmentCache,
             subtitles = subtitleCache,
             sleepDeadlineMs = sleepDeadline,
-            completed = completed
+            completed = completed,
+            errorMessage = playbackError
         ))
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) { if (!player.isPlaying) stopSelf() }
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val keepService = PlaybackServicePolicy.shouldKeepOnTaskRemoved(player.isPlaying, player.mediaItemCount)
+        Log.i(TAG, "onTaskRemoved isPlaying=${player.isPlaying} mediaItems=${player.mediaItemCount} keep=$keepService")
+        if (!keepService) stopSelf()
+    }
+
     override fun onDestroy() {
+        Log.i(TAG, "PlaybackService destroyed isPlaying=${player.isPlaying} state=${player.playbackState}")
         handler.removeCallbacksAndMessages(null)
         session.release()
         player.release()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val TAG = "EchoPlayback"
     }
 }
