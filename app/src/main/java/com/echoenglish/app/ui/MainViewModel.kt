@@ -6,13 +6,23 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.echoenglish.app.EchoEnglishApp
-import com.echoenglish.app.data.*
-import com.echoenglish.app.model.*
-import com.echoenglish.app.playback.*
+import com.echoenglish.app.data.LibraryRepository
+import com.echoenglish.app.data.TrackEntity
+import com.echoenglish.app.model.PlaybackSettings
+import com.echoenglish.app.model.PlaylistMode
+import com.echoenglish.app.model.Segment
+import com.echoenglish.app.model.SegmentMode
+import com.echoenglish.app.model.SrtCue
+import com.echoenglish.app.playback.PlaybackBus
+import com.echoenglish.app.playback.PlaybackContract
+import com.echoenglish.app.playback.PlaybackService
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -20,15 +30,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = app.database.trackDao
     private val library = LibraryRepository(app, dao)
     val tracks = dao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val settings = app.settingsRepository.settings.stateIn(viewModelScope, SharingStarted.Eagerly, PlaybackSettings())
+    private val mutableSettings = MutableStateFlow(PlaybackSettings())
+    val settings = mutableSettings.asStateFlow()
     val playback = PlaybackBus.state
     private val mutableCurrent = MutableStateFlow<TrackEntity?>(null)
     val current = mutableCurrent.asStateFlow()
     private val mutableMessage = MutableStateFlow<String?>(null)
     val message = mutableMessage.asStateFlow()
+    private var currentCues: List<SrtCue> = emptyList()
+    private var currentSegments: List<Segment> = emptyList()
     private var completionHandled = false
 
     init {
+        viewModelScope.launch { app.settingsRepository.settings.collect { mutableSettings.value = it } }
         viewModelScope.launch {
             playback.collect { state ->
                 if (state.completed && !completionHandled) {
@@ -54,37 +68,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importTree(uri: Uri) = viewModelScope.launch {
         runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        val files = library.collectTree(uri)
-        importUris(files)
+        importUris(library.collectTree(uri))
     }
 
     fun openTrack(track: TrackEntity) = viewModelScope.launch {
-        val activeSettings = settings.value
-        val cues = track.subtitleUri?.let { uri ->
-            runCatching { app.contentResolver.openInputStream(Uri.parse(uri))?.use(SrtParser::parse) }.getOrNull()
-        }.orEmpty()
-        val useSubtitle = activeSettings.segmentMode == SegmentMode.SUBTITLE && cues.isNotEmpty()
-        val segments = if (useSubtitle) Segmenter.fromCues(cues, track.durationMs, activeSettings.leadInMs, activeSettings.leadOutMs)
-        else Segmenter.fixed(track.durationMs, activeSettings.segmentSeconds * 1000L)
-        if (segments.isEmpty()) {
+        val activeSettings = mutableSettings.value
+        currentCues = readCues(track)
+        currentSegments = buildSegments(activeSettings, track.durationMs)
+        if (currentSegments.isEmpty()) {
             mutableMessage.value = "无法生成播放片段，请检查音频时长或字幕"
             return@launch
         }
         mutableCurrent.value = track
         app.settingsRepository.saveLastTrack(track.id)
-        val targetSegment = track.currentSegment.coerceIn(0, segments.lastIndex)
-        val intent = Intent(app, PlaybackService::class.java).apply {
+        val targetSegment = track.currentSegment.coerceIn(0, currentSegments.lastIndex)
+        app.startService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_LOAD
             putExtra(PlaybackContract.EXTRA_URI, track.audioUri)
             putExtra(PlaybackContract.EXTRA_TITLE, track.title)
-            putExtra(PlaybackContract.EXTRA_STARTS, segments.map { it.startMs }.toLongArray())
-            putExtra(PlaybackContract.EXTRA_ENDS, segments.map { it.endMs }.toLongArray())
-            putExtra(PlaybackContract.EXTRA_TEXTS, segments.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_DURATION, track.durationMs)
+            putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
             putExtra(PlaybackContract.EXTRA_INDEX, targetSegment)
+            putExtra(PlaybackContract.EXTRA_POSITION, track.currentPositionMs)
             putExtra(PlaybackContract.EXTRA_SPEED, activeSettings.speed)
-        }
-        app.startService(intent)
+        })
     }
 
     fun command(action: String, position: Long? = null) {
@@ -94,17 +107,87 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         })
     }
 
+    fun seekAbsolute(positionMs: Long) = command(PlaybackContract.ACTION_SEEK_ABSOLUTE, positionMs)
+
+    fun seekToSegment(index: Int) {
+        app.startService(Intent(app, PlaybackService::class.java).apply {
+            action = PlaybackContract.ACTION_SEEK_SEGMENT
+            putExtra(PlaybackContract.EXTRA_INDEX, index)
+        })
+    }
+
+    fun updateSettings(value: PlaybackSettings) {
+        if (value.segmentMode == SegmentMode.SUBTITLE && mutableCurrent.value != null && currentCues.isEmpty()) {
+            mutableMessage.value = "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
+            return
+        }
+        val previous = mutableSettings.value
+        mutableSettings.value = value
+        viewModelScope.launch {
+            app.settingsRepository.save(value)
+            mutableCurrent.value?.let { track ->
+                val updated = track.copy(segmentMode = value.segmentMode.name, segmentSeconds = value.segmentSeconds, repeatCount = value.repeatCount, speed = value.speed)
+                mutableCurrent.value = updated
+                dao.update(updated)
+            }
+        }
+        if (mutableCurrent.value != null && (previous.segmentSeconds != value.segmentSeconds || previous.segmentMode != value.segmentMode)) {
+            rebuildActiveSegments(value)
+        }
+        if (previous.repeatCount != value.repeatCount) {
+            app.startService(Intent(app, PlaybackService::class.java).apply {
+                action = PlaybackContract.ACTION_UPDATE_REPEATS
+                putExtra(PlaybackContract.EXTRA_REPEATS, value.repeatCount)
+            })
+        }
+        if (previous.speed != value.speed) {
+            app.startService(Intent(app, PlaybackService::class.java).apply {
+                action = PlaybackContract.ACTION_UPDATE_SPEED
+                putExtra(PlaybackContract.EXTRA_SPEED, value.speed)
+            })
+        }
+    }
+
+    private fun rebuildActiveSegments(value: PlaybackSettings) {
+        val track = mutableCurrent.value ?: return
+        if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isEmpty()) {
+            val fallback = value.copy(segmentMode = SegmentMode.FIXED)
+            mutableSettings.value = fallback
+            mutableMessage.value = "当前音频没有匹配的有效字幕，已保持固定时长分段"
+            viewModelScope.launch { app.settingsRepository.save(fallback) }
+            return
+        }
+        currentSegments = buildSegments(value, track.durationMs)
+        if (currentSegments.isEmpty()) return
+        app.startService(Intent(app, PlaybackService::class.java).apply {
+            action = PlaybackContract.ACTION_UPDATE_SEGMENTS
+            putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_POSITION, playback.value.positionMs)
+        })
+    }
+
+    private fun buildSegments(value: PlaybackSettings, durationMs: Long): List<Segment> {
+        if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isNotEmpty()) {
+            return Segmenter.fromCues(currentCues, durationMs, value.leadInMs, value.leadOutMs)
+        }
+        return Segmenter.fixed(durationMs, value.segmentSeconds * 1000L).map { segment ->
+            val text = currentCues.filter { it.startMs < segment.endMs && it.endMs > segment.startMs }.joinToString(" ") { it.text.replace('\n', ' ') }
+            segment.copy(text = text)
+        }
+    }
+
+    private fun readCues(track: TrackEntity): List<SrtCue> = track.subtitleUri?.let { uri ->
+        runCatching { app.contentResolver.openInputStream(Uri.parse(uri))?.use(SrtParser::parse) }.getOrNull()
+    }.orEmpty()
+
     fun setSleepTimer(minutes: Int) {
         app.startService(Intent(app, PlaybackService::class.java).apply {
             action = if (minutes <= 0) PlaybackContract.ACTION_CANCEL_TIMER else PlaybackContract.ACTION_TIMER
             putExtra(PlaybackContract.EXTRA_TIMER_MINUTES, minutes)
-            putExtra(PlaybackContract.EXTRA_STOP_AT_END, settings.value.stopAtSegmentEnd)
+            putExtra(PlaybackContract.EXTRA_STOP_AT_END, mutableSettings.value.stopAtSegmentEnd)
         })
-    }
-
-    fun updateSettings(value: PlaybackSettings) = viewModelScope.launch {
-        app.settingsRepository.save(value)
-        mutableCurrent.value?.let { dao.update(it.copy(segmentMode=value.segmentMode.name, segmentSeconds=value.segmentSeconds, repeatCount=value.repeatCount, speed=value.speed)) }
     }
 
     fun delete(track: TrackEntity) = viewModelScope.launch { dao.delete(track) }
@@ -120,7 +203,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val list = tracks.value
         val currentTrack = mutableCurrent.value ?: return
         val index = list.indexOfFirst { it.id == currentTrack.id }
-        when (settings.value.playlistMode) {
+        when (mutableSettings.value.playlistMode) {
             PlaylistMode.STOP_AFTER_TRACK -> Unit
             PlaylistMode.SEQUENTIAL -> list.getOrNull(index + 1)?.let { openTrack(it) }
             PlaylistMode.LOOP_LIST -> if (list.isNotEmpty()) openTrack(list[(index + 1).mod(list.size)])
