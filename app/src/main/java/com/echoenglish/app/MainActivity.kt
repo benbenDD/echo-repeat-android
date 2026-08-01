@@ -20,12 +20,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DateRange
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -51,6 +50,8 @@ import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackSnapshot
 import com.echoenglish.app.ui.MainViewModel
+import com.echoenglish.app.ui.components.RoundedGlyph
+import com.echoenglish.app.ui.components.RoundedGlyphKind
 import com.echoenglish.app.util.SelectionLogic
 import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
@@ -149,7 +150,7 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
-                EchoNavItem(screen == Screen.LIBRARY, { screen = Screen.LIBRARY }, Icons.Rounded.List, "播放列表")
+                EchoNavItem(screen == Screen.LIBRARY, { screen = Screen.LIBRARY }, Icons.AutoMirrored.Rounded.List, "播放列表")
                 EchoNavItem(screen == Screen.PLAYER, { screen = Screen.PLAYER }, Icons.Rounded.PlayArrow, "复读")
                 EchoNavItem(screen == Screen.SETTINGS, { screen = Screen.SETTINGS }, Icons.Rounded.Settings, "设置")
             }
@@ -328,9 +329,16 @@ private fun PlayerScreen(
 
     Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onLibrary) { Icon(Icons.Rounded.ArrowBack, contentDescription = "返回播放列表", tint = Ink) }
+            IconButton(onClick = onLibrary) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回播放列表", tint = Ink) }
             Text(title.ifBlank { "请选择音频" }, Modifier.weight(1f), color = Ink, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            IconButton(onClick = { showTimer = true }) { Icon(Icons.Rounded.DateRange, contentDescription = "定时关闭", tint = Coral) }
+            IconButton(onClick = { showTimer = true }) {
+                RoundedGlyph(
+                    RoundedGlyphKind.ALARM,
+                    contentDescription = "睡眠定时",
+                    size = 25.dp,
+                    tint = Coral
+                )
+            }
         }
         val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 126.dp)
         SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute)
@@ -340,7 +348,11 @@ private fun PlayerScreen(
             Spacer(Modifier.width(6.dp))
             InfoPill("第 ${state.repeatIndex}/${if (state.repeatCount == 0) "∞" else state.repeatCount} 次", YellowLight, Color(0xFFC38D00))
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) { Text("定位片段", color = Purple, fontWeight = FontWeight.Bold) }
+            TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) {
+                RoundedGlyph(RoundedGlyphKind.TARGET, size = 17.dp, tint = Purple)
+                Spacer(Modifier.width(4.dp))
+                Text("定位片段", color = Purple, fontWeight = FontWeight.Bold)
+            }
         }
         if (state.isInSegmentGap) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -362,11 +374,19 @@ private fun PlayerScreen(
         }
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_PREVIOUS, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = SkyLight, contentColor = Ink)) { Text("上一段", fontWeight = FontWeight.Bold) }
+            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_PREVIOUS, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = SkyLight, contentColor = Ink)) {
+                RoundedGlyph(RoundedGlyphKind.PREVIOUS, size = 17.dp, tint = Ink)
+                Spacer(Modifier.width(4.dp))
+                Text("上一段", fontWeight = FontWeight.Bold)
+            }
             FilledIconButton(onClick = { onCommand(PlaybackContract.ACTION_TOGGLE, null) }, modifier = Modifier.size(62.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Coral, contentColor = Color.White)) {
                 if (state.isPlaying) PauseSymbol(27.dp, Color.White) else Icon(Icons.Rounded.PlayArrow, contentDescription = "播放", modifier = Modifier.size(34.dp))
             }
-            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_NEXT, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = MintLight, contentColor = Ink)) { Text("下一段", fontWeight = FontWeight.Bold) }
+            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_NEXT, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = MintLight, contentColor = Ink)) {
+                Text("下一段", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(4.dp))
+                RoundedGlyph(RoundedGlyphKind.NEXT, size = 17.dp, tint = Ink)
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { onCommand(PlaybackContract.ACTION_RESTART, null) }) {
@@ -517,27 +537,51 @@ private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings)
             Text("学习设置", fontSize = 29.sp, fontWeight = FontWeight.Black, color = Ink)
             Text("每次调整都会立即应用到当前音频", color = MutedInk, fontSize = 14.sp)
         }
-        item { SettingCard("分段方式", Icons.Rounded.List, Purple, PurpleLight) { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
+        item { SettingCard("分段方式", RoundedGlyphKind.CUT, Purple, PurpleLight) { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
+        item {
+            val enabled = value.segmentMode == SegmentMode.SUBTITLE
+            SettingCard(
+                "字幕播放范围",
+                RoundedGlyphKind.SUBTITLES,
+                Pink,
+                PinkLight,
+                enabled,
+                if (enabled) "可跳过字幕之间没有文字的原音频" else "仅在按字幕分段时可设置"
+            ) {
+                ChoiceGrid(
+                    listOf(
+                        "播放完整时间线" to SubtitlePlaybackScope.FULL_TIMELINE,
+                        "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY
+                    ),
+                    value.subtitlePlaybackScope,
+                    enabled
+                ) { onChange(value.copy(subtitlePlaybackScope = it)) }
+            }
+        }
         item {
             val enabled = value.segmentMode == SegmentMode.FIXED
-            SettingCard("每段时长", Icons.Rounded.DateRange, Coral, CoralLight, enabled, if (!enabled) "按字幕分段时，片段长度由字幕时间轴决定" else null) {
+            SettingCard("每段时长", RoundedGlyphKind.TIMER, Coral, CoralLight, enabled, if (!enabled) "按字幕分段时，片段长度由字幕时间轴决定" else null) {
                 ChoiceGrid(listOf("5秒" to 5, "10秒" to 10, "15秒" to 15, "20秒" to 20, "30秒" to 30), value.segmentSeconds, enabled) { onChange(value.copy(segmentSeconds = it)) }
             }
         }
-        item { SettingCard("每段重复", Icons.Rounded.Refresh, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
-        item { SettingCard("分段间隔", Icons.Rounded.DateRange, Color(0xFF287EBC), SkyLight, hint = "每次复读之间和进入下一段前保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
-        item { SettingCard("播放速度", Icons.Rounded.PlayArrow, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
-        item { SettingCard("列表播放", Icons.Rounded.List, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
-        item { SettingCard("定时到点", Icons.Rounded.DateRange, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
+        item { SettingCard("每段重复", RoundedGlyphKind.REPEAT, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
+        item { SettingCard("分段间隔", RoundedGlyphKind.GAP, Color(0xFF287EBC), SkyLight, hint = "每次复读之间和进入下一段前保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
+        item { SettingCard("播放速度", RoundedGlyphKind.SPEED, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
+        item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
+        item { SettingCard("定时到点", RoundedGlyphKind.BEDTIME, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
     }
 }
 
 @Composable
-private fun SettingCard(title: String, icon: ImageVector, accent: Color, background: Color, enabled: Boolean = true, hint: String? = null, content: @Composable () -> Unit) {
+private fun SettingCard(title: String, icon: RoundedGlyphKind, accent: Color, background: Color, enabled: Boolean = true, hint: String? = null, content: @Composable () -> Unit) {
     Surface(modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else .5f), shape = CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = RoundedCornerShape(12.dp), color = background, modifier = Modifier.size(38.dp)) { Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp)) } }
+                Surface(shape = RoundedCornerShape(12.dp), color = background, modifier = Modifier.size(38.dp)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        RoundedGlyph(icon, size = 22.dp, tint = accent)
+                    }
+                }
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(title, fontWeight = FontWeight.Black, color = Ink)

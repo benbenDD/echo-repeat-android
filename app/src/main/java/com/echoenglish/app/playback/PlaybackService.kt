@@ -39,6 +39,7 @@ class PlaybackService : MediaSessionService() {
     private var repeatIndex = 1
     private var repeatCount = 1
     private var segmentGapMs = 0L
+    private var skipSubtitleGaps = false
     private var currentTitle = ""
     private var knownDurationMs = 0L
     private var sleepDeadline = 0L
@@ -234,9 +235,24 @@ class PlaybackService : MediaSessionService() {
         segmentGapMs = SegmentPlaybackPolicy.normalizedGapMs(
             intent.getLongExtra(PlaybackContract.EXTRA_GAP_MS, 0L)
         )
+        skipSubtitleGaps = intent.getBooleanExtra(
+            PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
+            false
+        )
         val requestedPosition = intent.getLongExtra(PlaybackContract.EXTRA_POSITION, -1)
-        segmentIndex = if (requestedPosition >= 0) {
-            PlaybackMath.segmentIndexAt(starts, ends, requestedPosition)
+        val resolvedPosition = if (requestedPosition >= 0) {
+            PlaybackMath.snapToPlayablePosition(
+                starts,
+                ends,
+                requestedPosition,
+                knownDurationMs,
+                skipSubtitleGaps
+            )
+        } else {
+            -1L
+        }
+        segmentIndex = if (resolvedPosition >= 0) {
+            PlaybackMath.segmentIndexAt(starts, ends, resolvedPosition)
         } else {
             intent.getIntExtra(PlaybackContract.EXTRA_INDEX, 0)
                 .coerceIn(0, (starts.size - 1).coerceAtLeast(0))
@@ -245,8 +261,8 @@ class PlaybackService : MediaSessionService() {
         currentTitle = intent.getStringExtra(PlaybackContract.EXTRA_TITLE).orEmpty()
         completed = false
         pendingSleepStop = false
-        val startPosition = if (requestedPosition >= 0) {
-            requestedPosition.coerceIn(0, knownDurationMs.coerceAtLeast(0))
+        val startPosition = if (resolvedPosition >= 0) {
+            resolvedPosition
         } else {
             starts.getOrElse(segmentIndex) { 0 }
         }
@@ -282,11 +298,22 @@ class PlaybackService : MediaSessionService() {
         ends = newEnds
         texts = intent.getStringArrayExtra(PlaybackContract.EXTRA_TEXTS)
             ?: Array(starts.size) { "" }
-        segmentIndex = PlaybackMath.segmentIndexAt(starts, ends, absolute)
+        skipSubtitleGaps = intent.getBooleanExtra(
+            PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
+            false
+        )
+        val target = PlaybackMath.snapToPlayablePosition(
+            starts,
+            ends,
+            absolute,
+            durationMs(),
+            skipSubtitleGaps
+        )
+        segmentIndex = PlaybackMath.segmentIndexAt(starts, ends, target)
         repeatIndex = 1
         completed = false
         rebuildCaches()
-        player.seekTo(absolute.coerceAtMost(durationMs()))
+        player.seekTo(target)
         if (continuePlaying) player.play() else player.pause()
         if (continuePlaying) armBoundary()
         publish()
@@ -348,7 +375,8 @@ class PlaybackService : MediaSessionService() {
                 repeatCount,
                 segmentGapMs,
                 segmentIndex == starts.lastIndex,
-                pendingSleepStop
+                pendingSleepStop,
+                skipSubtitleGaps
             )
             if (!exactBoundary) {
                 val naturalIndex = PlaybackMath.segmentIndexAt(starts, ends, position)
@@ -397,7 +425,8 @@ class PlaybackService : MediaSessionService() {
             repeatCount,
             segmentGapMs,
             segmentIndex == starts.lastIndex,
-            pendingSleepStop
+            pendingSleepStop,
+            skipSubtitleGaps
         )
         if (!needsBoundary) return
 
@@ -582,7 +611,13 @@ class PlaybackService : MediaSessionService() {
         if (starts.isEmpty()) return
         val continuePlaying = effectiveIsPlaying()
         cancelAutomatedWork(clearGap = true)
-        val target = positionMs.coerceIn(0, durationMs())
+        val target = PlaybackMath.snapToPlayablePosition(
+            starts,
+            ends,
+            positionMs,
+            durationMs(),
+            skipSubtitleGaps
+        )
         segmentIndex = PlaybackMath.segmentIndexAt(starts, ends, target)
         repeatIndex = 1
         completed = false

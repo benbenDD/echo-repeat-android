@@ -14,6 +14,7 @@ import com.echoenglish.app.model.PlaylistMode
 import com.echoenglish.app.model.Segment
 import com.echoenglish.app.model.SegmentMode
 import com.echoenglish.app.model.SrtCue
+import com.echoenglish.app.model.SubtitlePlaybackScope
 import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackService
@@ -92,7 +93,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openTrack(track: TrackEntity) = viewModelScope.launch {
         val activeSettings = mutableSettings.value
         currentCues = readCues(track)
+        if (activeSettings.segmentMode == SegmentMode.SUBTITLE &&
+            Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
+        ) {
+            mutableMessage.value = "当前音频没有有效字幕，本次临时使用固定时长分段"
+        }
         currentSegments = buildSegments(activeSettings, track.durationMs)
+        val skipSubtitleGaps = shouldSkipSubtitleGaps(activeSettings, track.durationMs)
         if (currentSegments.isEmpty()) {
             mutableMessage.value = "无法生成播放片段，请检查音频时长或字幕"
             return@launch
@@ -114,6 +121,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
             putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
+            putExtra(PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS, skipSubtitleGaps)
             putExtra(PlaybackContract.EXTRA_INDEX, targetSegment)
             putExtra(PlaybackContract.EXTRA_POSITION, track.currentPositionMs)
             putExtra(PlaybackContract.EXTRA_SPEED, activeSettings.speed)
@@ -137,8 +145,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSettings(value: PlaybackSettings) {
-        if (value.segmentMode == SegmentMode.SUBTITLE && mutableCurrent.value != null && currentCues.isEmpty()) {
-            mutableMessage.value = "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
+        val currentTrack = mutableCurrent.value
+        if (value.segmentMode == SegmentMode.SUBTITLE && currentTrack != null &&
+            Segmenter.cueOnly(currentCues, currentTrack.durationMs).isEmpty()
+        ) {
+            mutableMessage.value = if (value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY) {
+                "当前音频没有匹配的有效字幕，无法只播放字幕片段"
+            } else {
+                "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
+            }
             return
         }
         val previous = mutableSettings.value
@@ -151,7 +166,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 dao.update(updated)
             }
         }
-        if (mutableCurrent.value != null && (previous.segmentSeconds != value.segmentSeconds || previous.segmentMode != value.segmentMode)) {
+        if (mutableCurrent.value != null && (
+                previous.segmentSeconds != value.segmentSeconds ||
+                    previous.segmentMode != value.segmentMode ||
+                    previous.subtitlePlaybackScope != value.subtitlePlaybackScope
+                )
+        ) {
             rebuildActiveSegments(value)
         }
         if (previous.repeatCount != value.repeatCount) {
@@ -176,7 +196,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun rebuildActiveSegments(value: PlaybackSettings) {
         val track = mutableCurrent.value ?: return
-        if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isEmpty()) {
+        if (value.segmentMode == SegmentMode.SUBTITLE &&
+            Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
+        ) {
             val fallback = value.copy(segmentMode = SegmentMode.FIXED)
             mutableSettings.value = fallback
             mutableMessage.value = "当前音频没有匹配的有效字幕，已保持固定时长分段"
@@ -190,19 +212,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
+            putExtra(
+                PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
+                shouldSkipSubtitleGaps(value, track.durationMs)
+            )
             putExtra(PlaybackContract.EXTRA_POSITION, playback.value.positionMs)
         })
     }
 
     private fun buildSegments(value: PlaybackSettings, durationMs: Long): List<Segment> {
         if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isNotEmpty()) {
-            return Segmenter.fromCues(currentCues, durationMs, value.leadInMs, value.leadOutMs)
+            return if (value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY) {
+                Segmenter.cueOnly(currentCues, durationMs)
+            } else {
+                Segmenter.fromCues(currentCues, durationMs, value.leadInMs, value.leadOutMs)
+            }
         }
         return Segmenter.fixed(durationMs, value.segmentSeconds * 1000L).map { segment ->
             val text = currentCues.filter { it.startMs < segment.endMs && it.endMs > segment.startMs }.joinToString(" ") { it.text.replace('\n', ' ') }
             segment.copy(text = text)
         }
     }
+
+    private fun shouldSkipSubtitleGaps(value: PlaybackSettings, durationMs: Long): Boolean =
+        value.segmentMode == SegmentMode.SUBTITLE &&
+            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY &&
+            Segmenter.cueOnly(currentCues, durationMs).isNotEmpty()
 
     private fun readCues(track: TrackEntity): List<SrtCue> = track.subtitleUri?.let { uri ->
         runCatching { app.contentResolver.openInputStream(Uri.parse(uri))?.use(SrtParser::parse) }.getOrNull()

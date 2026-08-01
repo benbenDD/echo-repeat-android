@@ -27,6 +27,7 @@ object PlaybackContract {
     const val EXTRA_CUE_TEXTS = "cue_texts"
     const val EXTRA_REPEATS = "repeats"
     const val EXTRA_GAP_MS = "segment_gap_ms"
+    const val EXTRA_SKIP_SUBTITLE_GAPS = "skip_subtitle_gaps"
     const val EXTRA_INDEX = "index"
     const val EXTRA_SPEED = "speed"
     const val EXTRA_POSITION = "position"
