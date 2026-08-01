@@ -179,4 +179,88 @@ class SegmentPlaybackPolicyTest {
             )
         )
     }
-}
+
+    @Test fun finalRepeatReusesMatchingPreparedWindow() {
+        assertTrue(
+            SegmentPlaybackPolicy.canReusePreparedWindow(
+                hasCurrentMediaItem = true,
+                currentPipelineClipped = true,
+                requiredPipelineClipped = true,
+                currentWindowStartMs = 15_000,
+                requiredWindowStartMs = 15_000,
+                currentWindowEndMs = 20_000,
+                requiredWindowEndMs = 20_000
+            )
+        )
+    }
+
+    @Test fun finalRepeatQueueRequirementDoesNotInvalidateWindowReuse() {
+        val shouldQueueNext = SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+            repeatCount = 5,
+            repeatIndex = 5,
+            hasNextSegment = true,
+            isAdjacent = true
+        )
+        val canReuseCurrent = SegmentPlaybackPolicy.canReusePreparedWindow(
+            hasCurrentMediaItem = true,
+            currentPipelineClipped = true,
+            requiredPipelineClipped = true,
+            currentWindowStartMs = 15_000,
+            requiredWindowStartMs = 15_000,
+            currentWindowEndMs = 20_000,
+            requiredWindowEndMs = 20_000
+        )
+
+        assertTrue(shouldQueueNext)
+        assertTrue(canReuseCurrent)
+    }
+
+    @Test fun finiteRepeatCountsQueueOnlyOnTheirFinalRepeat() {
+        listOf(2, 3, 5, 10).forEach { count ->
+            assertFalse(
+                SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                    repeatCount = count,
+                    repeatIndex = count - 1,
+                    hasNextSegment = true,
+                    isAdjacent = true
+                )
+            )
+            assertTrue(
+                SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
+                    repeatCount = count,
+                    repeatIndex = count,
+                    hasNextSegment = true,
+                    isAdjacent = true
+                )
+            )
+        }
+    }
+
+    @Test fun preparedWindowCannotBeReusedWhenMediaItemIsMissing() {
+        assertFalse(
+            SegmentPlaybackPolicy.canReusePreparedWindow(
+                false, true, true, 15_000, 15_000, 20_000, 20_000
+            )
+        )
+    }
+
+    @Test fun preparedWindowCannotBeReusedWhenClippingModeChanges() {
+        assertFalse(
+            SegmentPlaybackPolicy.canReusePreparedWindow(
+                true, false, true, 15_000, 15_000, 20_000, 20_000
+            )
+        )
+    }
+
+    @Test fun preparedWindowCannotBeReusedWhenBoundariesChange() {
+        assertFalse(
+            SegmentPlaybackPolicy.canReusePreparedWindow(
+                true, true, true, 14_999, 15_000, 20_000, 20_000
+            )
+        )
+        assertFalse(
+            SegmentPlaybackPolicy.canReusePreparedWindow(
+                true, true, true, 15_000, 15_000, 20_001, 20_000
+            )
+        )
+    }}

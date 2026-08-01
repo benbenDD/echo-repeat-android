@@ -59,6 +59,12 @@ class PlaybackService : MediaSessionService() {
     private var isPipelineClipped = false
     private var transitionInProgress = false
     private var queuedAdjacentSegmentIndex: Int? = null
+    private var queuedAdjacentMediaItemIndex: Int? = null
+    private var repeatBoundaryDetectedElapsedMs = 0L
+    private var repeatRestartRequestedElapsedMs = 0L
+    private var repeatReusedPreparedWindow = false
+    private var repeatUsedAddMediaItem = false
+    private var repeatCalledPrepare = false
     private var boundaryHandledGeneration = -1L
     private var armedBoundaryToken: BoundaryToken? = null
     private lateinit var gapWakeLock: PowerManager.WakeLock
@@ -117,7 +123,10 @@ class PlaybackService : MediaSessionService() {
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         Log.i(TAG, "isPlaying=$isPlaying state=$playbackState phase=${phaseName()}")
-                        if (isPlaying) armBoundary()
+                        if (isPlaying) {
+                            logCompletedRepeatTransition()
+                            armBoundary()
+                        }
                         publish()
                     }
 
@@ -127,24 +136,33 @@ class PlaybackService : MediaSessionService() {
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        val queuedIndex = queuedAdjacentSegmentIndex
+                        val queuedSegmentIndex = queuedAdjacentSegmentIndex
+                        val queuedMediaItemIndex = queuedAdjacentMediaItemIndex
+                        val currentMediaItemIndex = this@PlaybackService.player.currentMediaItemIndex
                         if (
                             reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
-                            queuedIndex != null &&
-                            this@PlaybackService.player.currentMediaItemIndex == 1
+                            queuedSegmentIndex != null &&
+                            queuedMediaItemIndex != null &&
+                            currentMediaItemIndex == queuedMediaItemIndex
                         ) {
                             transitionInProgress = true
                             cancelBoundary()
-                            segmentIndex = queuedIndex
+                            segmentIndex = queuedSegmentIndex
                             repeatIndex = 1
-                            playbackWindowStartMs = starts[queuedIndex]
-                            playbackWindowEndMs = ends[queuedIndex]
+                            playbackWindowStartMs = starts[queuedSegmentIndex]
+                            playbackWindowEndMs = ends[queuedSegmentIndex]
                             queuedAdjacentSegmentIndex = null
+                            queuedAdjacentMediaItemIndex = null
+                            if (currentMediaItemIndex > 0) {
+                                this@PlaybackService.player.removeMediaItems(0, currentMediaItemIndex)
+                            }
                             transitionInProgress = false
                             Log.i(
                                 TAG,
                                 "queued transition segment=$segmentIndex repeat=1 " +
-                                    "window=$playbackWindowStartMs..$playbackWindowEndMs"
+                                    "window=$playbackWindowStartMs..$playbackWindowEndMs " +
+                                    "consumedMediaItemIndex=$currentMediaItemIndex " +
+                                    "mediaItemCount=${this@PlaybackService.player.mediaItemCount}"
                             )
                             armBoundary()
                             publish()
@@ -442,6 +460,36 @@ class PlaybackService : MediaSessionService() {
 
     private fun desiredWindowEndMs(): Long = ends[segmentIndex]
 
+    private fun discardFutureMediaItems() {
+        val currentMediaItemIndex = player.currentMediaItemIndex
+        val firstFutureIndex = currentMediaItemIndex + 1
+        if (currentMediaItemIndex >= 0 && firstFutureIndex < player.mediaItemCount) {
+            player.removeMediaItems(firstFutureIndex, player.mediaItemCount)
+        }
+        queuedAdjacentSegmentIndex = null
+        queuedAdjacentMediaItemIndex = null
+    }
+
+    private fun prepareAdjacentSegmentForFinalRepeat(): Boolean {
+        val nextSegmentIndex = adjacentNextForQueue() ?: return false
+        val currentMediaItemIndex = player.currentMediaItemIndex
+        if (currentMediaItemIndex < 0) return false
+        val targetMediaItemIndex = currentMediaItemIndex + 1
+        player.addMediaItem(
+            targetMediaItemIndex,
+            buildMediaItem(starts[nextSegmentIndex], ends[nextSegmentIndex])
+        )
+        queuedAdjacentSegmentIndex = nextSegmentIndex
+        queuedAdjacentMediaItemIndex = targetMediaItemIndex
+        Log.i(
+            TAG,
+            "adjacent item appended segment=$segmentIndex repeat=$repeatIndex " +
+                "queuedSegment=$nextSegmentIndex queuedMediaItem=$targetMediaItemIndex " +
+                "mediaItemCount=${player.mediaItemCount} usedAddMediaItem=true calledPrepare=false"
+        )
+        return true
+    }
+
     private fun startPlaybackAt(absolutePositionMs: Long, shouldPlay: Boolean) {
         if (sourceUri == null || starts.isEmpty()) return
         transitionInProgress = true
@@ -450,6 +498,7 @@ class PlaybackService : MediaSessionService() {
         val useClip = requiresPipelineClipping()
         val queuedNext = if (useClip) adjacentNextForQueue() else null
         queuedAdjacentSegmentIndex = queuedNext
+        queuedAdjacentMediaItemIndex = if (queuedNext != null) 1 else null
         playbackWindowStartMs = if (useClip) starts[segmentIndex] else 0L
         playbackWindowEndMs = if (useClip) desiredWindowEndMs() else knownDurationMs
         isPipelineClipped = useClip
@@ -466,7 +515,7 @@ class PlaybackService : MediaSessionService() {
             TAG,
             "window start=$playbackWindowStartMs end=$playbackWindowEndMs " +
                 "target=$targetAbsolute clipped=$isPipelineClipped segment=$segmentIndex " +
-                "repeat=$repeatIndex queuedNext=${queuedNext ?: -1}"
+                "repeat=$repeatIndex queuedNext=${queuedNext ?: -1} usedSetMediaItems=true"
         )
         val currentItem = buildMediaItem(playbackWindowStartMs, playbackWindowEndMs)
         if (queuedNext != null) {
@@ -481,6 +530,7 @@ class PlaybackService : MediaSessionService() {
         } else {
             player.setMediaItem(currentItem, itemPosition)
         }
+        if (repeatRestartRequestedElapsedMs > 0L) repeatCalledPrepare = true
         player.prepare()
         if (isPipelineClipped) {
             player.seekTo(0, itemPosition)
@@ -495,13 +545,16 @@ class PlaybackService : MediaSessionService() {
         val useClip = requiresPipelineClipping()
         val segmentStart = starts[segmentIndex]
         val desiredEnd = if (useClip) desiredWindowEndMs() else knownDurationMs
-        val needsQueuedTransition = useClip && adjacentNextForQueue() != null
-        val canReusePreparedWindow =
-            !needsQueuedTransition &&
-            player.currentMediaItem != null &&
-                isPipelineClipped == useClip &&
-                playbackWindowStartMs == segmentStart &&
-                playbackWindowEndMs == desiredEnd
+        val canReusePreparedWindow = SegmentPlaybackPolicy.canReusePreparedWindow(
+            hasCurrentMediaItem = player.currentMediaItem != null,
+            currentPipelineClipped = isPipelineClipped,
+            requiredPipelineClipped = useClip,
+            currentWindowStartMs = playbackWindowStartMs,
+            requiredWindowStartMs = segmentStart,
+            currentWindowEndMs = playbackWindowEndMs,
+            requiredWindowEndMs = desiredEnd
+        )
+        repeatReusedPreparedWindow = canReusePreparedWindow
         if (!canReusePreparedWindow) {
             startPlaybackAt(starts[segmentIndex], shouldPlay)
             return
@@ -511,12 +564,18 @@ class PlaybackService : MediaSessionService() {
         cancelBoundary()
         completed = false
         val itemPositionMs = if (isPipelineClipped) 0L else segmentStart
+        val currentMediaItemIndex = player.currentMediaItemIndex.coerceAtLeast(0)
+        discardFutureMediaItems()
+        player.seekTo(currentMediaItemIndex, itemPositionMs)
+        repeatUsedAddMediaItem = useClip && prepareAdjacentSegmentForFinalRepeat()
         Log.i(
             TAG,
             "window reused start=$playbackWindowStartMs end=$playbackWindowEndMs " +
-                "target=${starts[segmentIndex]} segment=$segmentIndex repeat=$repeatIndex"
+                "target=${starts[segmentIndex]} segment=$segmentIndex repeat=$repeatIndex " +
+                "reusedPreparedWindow=true usedSetMediaItems=false " +
+                "usedAddMediaItem=$repeatUsedAddMediaItem calledPrepare=false " +
+                "mediaItemCount=${player.mediaItemCount}"
         )
-        player.seekTo(itemPositionMs)
         playbackTaskActive = shouldPlay
         if (shouldPlay) player.play() else player.pause()
         transitionInProgress = false
@@ -800,6 +859,11 @@ class PlaybackService : MediaSessionService() {
             repeatIndex,
             segmentIndex == starts.lastIndex
         )
+        if (action == SegmentBoundaryAction.REPEAT_CURRENT) {
+            repeatBoundaryDetectedElapsedMs = SystemClock.elapsedRealtime()
+        } else {
+            clearRepeatTransitionTiming()
+        }
         if (SegmentPlaybackPolicy.shouldInsertGap(action, segmentGapMs)) {
             beginGap(action)
         } else {
@@ -863,6 +927,13 @@ class PlaybackService : MediaSessionService() {
         clearGapState()
         when (action) {
             SegmentBoundaryAction.REPEAT_CURRENT -> {
+                if (repeatBoundaryDetectedElapsedMs == 0L) {
+                    repeatBoundaryDetectedElapsedMs = SystemClock.elapsedRealtime()
+                }
+                repeatRestartRequestedElapsedMs = SystemClock.elapsedRealtime()
+                repeatReusedPreparedWindow = false
+                repeatUsedAddMediaItem = false
+                repeatCalledPrepare = false
                 repeatIndex++
                 completed = false
                 restartCurrentSegment(shouldPlay = true)
@@ -1010,8 +1081,42 @@ class PlaybackService : MediaSessionService() {
     private fun effectiveIsPlaying(): Boolean =
         player.isPlaying || (isInSegmentGap && !isSegmentGapPaused)
 
+    private fun logCompletedRepeatTransition() {
+        if (repeatRestartRequestedElapsedMs <= 0L) return
+        val playbackResumedElapsedMs = SystemClock.elapsedRealtime()
+        val boundaryElapsedMs = repeatBoundaryDetectedElapsedMs
+            .takeIf { it > 0L }
+            ?: repeatRestartRequestedElapsedMs
+        Log.i(
+            TAG,
+            "repeat transition segment=$segmentIndex repeat=$repeatIndex/$repeatCount " +
+                "segmentStartMs=${starts.getOrElse(segmentIndex) { 0L }} " +
+                "segmentEndMs=${ends.getOrElse(segmentIndex) { 0L }} " +
+                "segmentGapMs=$segmentGapMs boundaryDetectedElapsedMs=$boundaryElapsedMs " +
+                "restartRequestedElapsedMs=$repeatRestartRequestedElapsedMs " +
+                "playbackResumedElapsedMs=$playbackResumedElapsedMs " +
+                "actualTransitionDurationMs=${playbackResumedElapsedMs - boundaryElapsedMs} " +
+                "restartLatencyMs=${playbackResumedElapsedMs - repeatRestartRequestedElapsedMs} " +
+                "reusedPreparedWindow=$repeatReusedPreparedWindow " +
+                "mediaItemCount=${player.mediaItemCount} " +
+                "queuedAdjacentSegmentIndex=${queuedAdjacentSegmentIndex ?: -1} " +
+                "usedSetMediaItems=${!repeatReusedPreparedWindow} " +
+                "usedAddMediaItem=$repeatUsedAddMediaItem calledPrepare=$repeatCalledPrepare"
+        )
+        clearRepeatTransitionTiming()
+    }
+
+    private fun clearRepeatTransitionTiming() {
+        repeatBoundaryDetectedElapsedMs = 0L
+        repeatRestartRequestedElapsedMs = 0L
+        repeatReusedPreparedWindow = false
+        repeatUsedAddMediaItem = false
+        repeatCalledPrepare = false
+    }
+
     private fun cancelAutomatedWork(clearGap: Boolean) {
         cancelBoundary()
+        clearRepeatTransitionTiming()
         gapRunnable?.let(handler::removeCallbacks)
         gapRunnable = null
         transitionInProgress = false

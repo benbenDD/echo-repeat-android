@@ -51,6 +51,20 @@ object SegmentPlaybackPolicy {
             hasNextSegment &&
             isAdjacent
 
+    fun canReusePreparedWindow(
+        hasCurrentMediaItem: Boolean,
+        currentPipelineClipped: Boolean,
+        requiredPipelineClipped: Boolean,
+        currentWindowStartMs: Long,
+        requiredWindowStartMs: Long,
+        currentWindowEndMs: Long,
+        requiredWindowEndMs: Long
+    ): Boolean =
+        hasCurrentMediaItem &&
+            currentPipelineClipped == requiredPipelineClipped &&
+            currentWindowStartMs == requiredWindowStartMs &&
+            currentWindowEndMs == requiredWindowEndMs
+
     fun alignedInitialPosition(
         requestedPositionMs: Long,
         segmentStartMs: Long,
