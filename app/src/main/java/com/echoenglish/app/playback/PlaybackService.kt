@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.playback
+package com.echoenglish.app.playback
 
 import android.content.Intent
 import android.os.Handler
@@ -49,7 +49,10 @@ class PlaybackService : MediaSessionService() {
             setHandleAudioBecomingNoisy(true)
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) = publish()
-                override fun onPlaybackStateChanged(playbackState: Int) = publish()
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_ENDED) completed = true
+                    publish()
+                }
             })
         }
         session = MediaSession.Builder(this, player).build()
@@ -141,20 +144,40 @@ class PlaybackService : MediaSessionService() {
         if (sleepDeadline > 0 && System.currentTimeMillis() >= sleepDeadline) {
             if (stopAtSegmentEnd) pendingSleepStop = true else { player.pause(); clearTimer() }
         }
-        if (player.isPlaying && ends.isNotEmpty() && player.currentPosition >= ends[segmentIndex] - 35) {
-            if (pendingSleepStop) {
-                player.pause(); clearTimer(); pendingSleepStop = false
-            } else if (repeatCount == 0 || repeatIndex < repeatCount) {
-                repeatIndex++
-                player.seekTo(starts[segmentIndex])
-            } else if (segmentIndex < starts.lastIndex) {
-                segmentIndex++
-                repeatIndex = 1
-                player.seekTo(starts[segmentIndex])
-            } else {
-                completed = true
+        if (player.isPlaying && ends.isNotEmpty()) {
+            val position = player.currentPosition
+            val segmentEnd = ends[segmentIndex]
+            if (pendingSleepStop && position >= segmentEnd) {
                 player.pause()
-                player.seekTo(ends[segmentIndex])
+                clearTimer()
+                pendingSleepStop = false
+            } else if (repeatCount == 1) {
+                // Keep a single pass on ExoPlayer's continuous timeline. Seeking at every
+                // adjacent boundary creates an audible discontinuity.
+                val naturalIndex = PlaybackMath.segmentIndexAt(starts, ends, position)
+                if (naturalIndex != segmentIndex) {
+                    segmentIndex = naturalIndex
+                    repeatIndex = 1
+                }
+                if (segmentIndex == starts.lastIndex && position >= ends[segmentIndex]) {
+                    completed = true
+                    player.pause()
+                    player.seekTo(ends[segmentIndex])
+                }
+            } else if (position >= segmentEnd) {
+                if (PlaybackMath.shouldRepeatSegment(repeatCount, repeatIndex)) {
+                    repeatIndex++
+                    player.seekTo(starts[segmentIndex])
+                } else if (segmentIndex < starts.lastIndex) {
+                    // The final repetition is already moving forward on the same media
+                    // timeline, so entering the next segment must not seek again.
+                    segmentIndex++
+                    repeatIndex = 1
+                } else {
+                    completed = true
+                    player.pause()
+                    player.seekTo(ends[segmentIndex])
+                }
             }
         }
         publish()

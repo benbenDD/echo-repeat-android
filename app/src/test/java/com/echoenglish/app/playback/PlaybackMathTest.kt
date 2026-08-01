@@ -1,9 +1,28 @@
-﻿package com.echoenglish.app.playback
+package com.echoenglish.app.playback
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PlaybackMathTest {
+    @Test fun repeatOnceNeverLoopsAtBoundary() {
+        assertEquals(false, PlaybackMath.shouldRepeatSegment(1, 1))
+    }
+
+    @Test fun finiteRepeatLoopsUntilRequestedCount() {
+        assertEquals(true, PlaybackMath.shouldRepeatSegment(3, 1))
+        assertEquals(true, PlaybackMath.shouldRepeatSegment(3, 2))
+        assertEquals(false, PlaybackMath.shouldRepeatSegment(3, 3))
+    }
+
+    @Test fun zeroRepeatCountMeansInfiniteLooping() {
+        assertEquals(true, PlaybackMath.shouldRepeatSegment(0, 999))
+    }
+    @Test fun adjacentBoundaryBelongsToNextSegment() {
+        val starts = longArrayOf(0, 10_000, 20_000)
+        val ends = longArrayOf(10_000, 20_000, 30_000)
+        assertEquals(1, PlaybackMath.segmentIndexAt(starts, ends, 10_000))
+    }
+
     @Test fun absolutePositionFindsFiveSecondSegment() {
         val starts = LongArray(24) { it * 5_000L }
         val ends = LongArray(24) { (it + 1) * 5_000L }

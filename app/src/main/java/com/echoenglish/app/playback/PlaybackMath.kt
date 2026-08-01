@@ -1,6 +1,9 @@
-﻿package com.echoenglish.app.playback
+package com.echoenglish.app.playback
 
 object PlaybackMath {
+    fun shouldRepeatSegment(repeatCount: Int, repeatIndex: Int): Boolean =
+        repeatCount == 0 || repeatIndex < repeatCount
+
     fun segmentIndexAt(starts: LongArray, ends: LongArray, positionMs: Long): Int {
         if (starts.isEmpty()) return 0
         val containing = starts.indices.lastOrNull { positionMs >= starts[it] && positionMs < ends.getOrElse(it) { Long.MAX_VALUE } }

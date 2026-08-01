@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app
+package com.echoenglish.app
 
 import android.Manifest
 import android.os.Build
@@ -178,6 +178,7 @@ private fun PlayerScreen(
 ) {
     var showTimer by remember { mutableStateOf(false) }
     var showSegments by remember { mutableStateOf(false) }
+    var subtitlesExpanded by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var segmentDrag by remember { mutableStateOf<Float?>(null) }
     var totalDrag by remember { mutableStateOf<Float?>(null) }
@@ -192,22 +193,37 @@ private fun PlayerScreen(
             Text(title.ifBlank { "请选择音频" }, Modifier.weight(1f), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = { showTimer = true }) { Text("定时") }
         }
-        SubtitlePanel(state, Modifier.fillMaxWidth().weight(1f), onSeekAbsolute)
+        val subtitleModifier = if (subtitlesExpanded) {
+            Modifier.fillMaxWidth().weight(1f)
+        } else {
+            Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 132.dp)
+        }
+        SubtitlePanel(
+            state = state,
+            modifier = subtitleModifier,
+            expanded = subtitlesExpanded,
+            onExpandedChange = { subtitlesExpanded = it },
+            onSubtitleClick = onSeekAbsolute
+        )
+        Spacer(Modifier.height(7.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段 · 第 ${state.repeatIndex}/${if (state.repeatCount == 0) "∞" else state.repeatCount} 次", Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Ink, fontSize = 14.sp)
             TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) { Text("选择片段", color = Purple) }
         }
-        ProgressBlock("当前段", segmentDrag ?: relative.toFloat(), segmentDuration.toFloat(), formatTime((segmentDrag ?: relative.toFloat()).toLong()), formatTime(segmentDuration), state.segmentCount > 0, { segmentDrag = it }) {
+        ProgressBlock("本段进度", segmentDrag ?: relative.toFloat(), segmentDuration.toFloat(), formatTime((segmentDrag ?: relative.toFloat()).toLong()), formatTime(segmentDuration), state.segmentCount > 0, { segmentDrag = it }) {
             segmentDrag?.let { onCommand(PlaybackContract.ACTION_SEEK, it.toLong()) }; segmentDrag = null
         }
-        ProgressBlock("整段音频", totalDrag ?: state.positionMs.coerceIn(0, totalDuration).toFloat(), totalDuration.toFloat(), formatTime((totalDrag ?: state.positionMs.toFloat()).toLong()), formatTime(state.durationMs), state.durationMs > 0, { totalDrag = it }) {
+        Spacer(Modifier.height(9.dp))
+        ProgressBlock("总进度", totalDrag ?: state.positionMs.coerceIn(0, totalDuration).toFloat(), totalDuration.toFloat(), formatTime((totalDrag ?: state.positionMs.toFloat()).toLong()), formatTime(state.durationMs), state.durationMs > 0, { totalDrag = it }) {
             totalDrag?.let { onSeekAbsolute(it.toLong()) }; totalDrag = null
         }
+        Spacer(Modifier.height(11.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { onCommand(PlaybackContract.ACTION_PREVIOUS, null) }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) { Text("上一段") }
             FilledIconButton(onClick = { onCommand(PlaybackContract.ACTION_TOGGLE, null) }, modifier = Modifier.size(60.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Orange)) { Text(if (state.isPlaying) "Ⅱ" else "▶", fontSize = 23.sp, color = Ink) }
             OutlinedButton(onClick = { onCommand(PlaybackContract.ACTION_NEXT, null) }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) { Text("下一段") }
         }
+        Spacer(Modifier.height(5.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { onCommand(PlaybackContract.ACTION_RESTART, null) }) { Text("↻ 重播当前段") }
             if (state.sleepDeadlineMs > 0) { val left = (state.sleepDeadlineMs - now).coerceAtLeast(0); AssistChip(onClick = { showTimer = true }, label = { Text("${formatTime(left)} 后停止") }) }
@@ -218,30 +234,105 @@ private fun PlayerScreen(
 }
 
 @Composable
-private fun SubtitlePanel(state: com.echoenglish.app.playback.PlaybackSnapshot, modifier: Modifier, onSubtitleClick: (Long) -> Unit) {
+private fun SubtitlePanel(
+    state: com.echoenglish.app.playback.PlaybackSnapshot,
+    modifier: Modifier,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSubtitleClick: (Long) -> Unit
+) {
     val listState = rememberLazyListState()
     var userBrowsing by remember { mutableStateOf(false) }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling -> if (scrolling) userBrowsing = true else { delay(2500); userBrowsing = false } }
+    var autoScrolling by remember { mutableStateOf(false) }
+
+    LaunchedEffect(listState, expanded) {
+        if (!expanded) return@LaunchedEffect
+        snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
+            if (scrolling && !autoScrolling) {
+                userBrowsing = true
+            } else if (!scrolling && userBrowsing) {
+                delay(2500)
+                userBrowsing = false
+            }
+        }
     }
-    LaunchedEffect(state.subtitleIndex, userBrowsing) {
-        if (!userBrowsing && state.subtitleIndex >= 0 && state.subtitleIndex < state.subtitles.size) listState.animateScrollToItem(state.subtitleIndex, -40)
+    LaunchedEffect(state.subtitleIndex, expanded, userBrowsing) {
+        if (expanded && !userBrowsing && state.subtitleIndex in state.subtitles.indices) {
+            delay(40)
+            autoScrolling = true
+            try {
+                val viewportHeight = listState.layoutInfo.viewportSize.height
+                val itemHeight = listState.layoutInfo.visibleItemsInfo
+                    .firstOrNull { it.index == state.subtitleIndex }?.size ?: 84
+                val centerOffset = -((viewportHeight - itemHeight) / 2).coerceAtLeast(0)
+                listState.animateScrollToItem(state.subtitleIndex, centerOffset)
+            } finally {
+                autoScrolling = false
+            }
+        }
     }
+
     Surface(modifier = modifier, shape = RoundedCornerShape(18.dp), color = Color.White) {
-        if (state.subtitles.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) { Text(state.subtitle.ifBlank { "当前音频没有字幕\n正在按固定时长复读" }, color = Ink, fontSize = 21.sp, lineHeight = 31.sp, fontWeight = FontWeight.Bold) }
-        } else LazyColumn(state = listState, contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            itemsIndexed(state.subtitles) { index, cue ->
-                val selected = index == state.subtitleIndex
-                Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp).background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(12.dp)).border(if (selected) 1.5.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(12.dp)).clickable { onSubtitleClick(cue.startMs) }.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(formatTime(cue.startMs), color = if (selected) Purple else Color.Gray, fontSize = 11.sp)
-                    Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                if (state.subtitles.isNotEmpty()) {
+                    TextButton(onClick = { onExpandedChange(!expanded) }) {
+                        Text(if (expanded) "收起字幕 ︿" else "展开字幕 ﹀", color = Purple, fontSize = 13.sp)
+                    }
+                }
+            }
+            if (state.subtitles.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+                    Text(state.subtitle.ifBlank { "当前音频暂无字幕" }, color = Ink, fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.Bold)
+                }
+            } else if (!expanded) {
+                val cue = state.subtitles.getOrNull(state.subtitleIndex)
+                Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        cue?.text ?: "字幕即将开始…",
+                        color = Ink,
+                        fontSize = 20.sp,
+                        lineHeight = 29.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            } else {
+                if (userBrowsing) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { userBrowsing = false }) { Text("回到当前字幕", color = Purple, fontSize = 12.sp) }
+                    }
+                }
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    state = listState,
+                    contentPadding = PaddingValues(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    itemsIndexed(state.subtitles) { index, cue ->
+                        val selected = index == state.subtitleIndex
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = 10.dp)
+                                .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(12.dp))
+                                .border(if (selected) 1.5.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(12.dp))
+                                .clickable { onSubtitleClick(cue.startMs) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Text(formatTime(cue.startMs), color = if (selected) Purple else Color.Gray, fontSize = 11.sp)
+                            Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
                 }
             }
         }
     }
 }
-
 @Composable
 private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText: String, rightText: String, enabled: Boolean, onValueChange: (Float) -> Unit, onFinished: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
@@ -293,17 +384,30 @@ private fun SettingCard(title: String, enabled: Boolean = true, hint: String? = 
 
 @Composable
 private fun <T> ChoiceGrid(options: List<Pair<String, T>>, selectedValue: T, enabled: Boolean = true, onSelect: (T) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         options.chunked(3).forEach { rowOptions ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 rowOptions.forEach { (label, option) ->
                     val selected = SelectionLogic.isSelected(selectedValue, option)
-                    FilterChip(selected = selected, onClick = { if (enabled) onSelect(option) }, enabled = enabled, label = { Text(label, fontSize = 13.sp) }, modifier = Modifier.border(if (selected) 1.5.dp else .7.dp, if (selected) Purple else Color.LightGray, RoundedCornerShape(9.dp)), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = PurpleLight, selectedLabelColor = Purple))
+                    val shape = RoundedCornerShape(10.dp)
+                    Box(
+                        modifier = Modifier.weight(1f).heightIn(min = 42.dp)
+                            .background(if (selected) PurpleLight else Color.White, shape)
+                            .border(if (selected) 1.5.dp else 0.8.dp, if (selected) Purple else Color.LightGray, shape)
+                            .clickable(enabled = enabled) { onSelect(option) }
+                            .padding(horizontal = 8.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            label,
+                            color = if (selected) Purple else Ink,
+                            fontSize = 13.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
                 }
+                repeat(3 - rowOptions.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
 }
-
-
-
