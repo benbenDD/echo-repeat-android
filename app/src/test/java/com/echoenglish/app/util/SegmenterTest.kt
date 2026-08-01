@@ -97,4 +97,101 @@ class SegmenterTest {
         assertEquals(0, result.first().startMs)
         assertEquals(result.first().endMs, result.last().startMs)
     }
-}
+
+    @Test fun cueOnlyZeroPaddingPreservesOriginalBoundaries() {
+        val cues = listOf(
+            SrtCue(1, 1_000, 2_000, "A"),
+            SrtCue(2, 4_000, 5_000, "B")
+        )
+        val result = Segmenter.cueOnly(cues, 8_000, 0, 0)
+        assertEquals(listOf(1_000L, 4_000L), result.map { it.startMs })
+        assertEquals(listOf(2_000L, 5_000L), result.map { it.endMs })
+    }
+
+    @Test fun cueOnlyAddsLeadInAndLeadOut() {
+        val result = Segmenter.cueOnly(
+            listOf(SrtCue(1, 1_000, 2_000, "Hello")), 5_000, 300, 500
+        )
+        assertEquals(700, result.single().startMs)
+        assertEquals(2_500, result.single().endMs)
+        assertEquals("Hello", result.single().text)
+    }
+
+    @Test fun cueOnlyPaddingIsClampedToAudioBounds() {
+        val result = Segmenter.cueOnly(
+            listOf(SrtCue(1, 100, 1_000, "A"), SrtCue(2, 4_500, 4_900, "B")),
+            5_000, 300, 500
+        )
+        assertEquals(0, result.first().startMs)
+        assertEquals(5_000, result.last().endMs)
+    }
+
+    @Test fun cueOnlyKeepsLargeSubtitleGapsSkipped() {
+        val result = Segmenter.cueOnly(
+            listOf(SrtCue(1, 1_000, 2_000, "A"), SrtCue(2, 10_000, 11_000, "B")),
+            12_000, 300, 500
+        )
+        assertEquals(2_500, result.first().endMs)
+        assertEquals(9_700, result.last().startMs)
+        assertTrue(result.first().endMs < result.last().startMs)
+    }
+
+    @Test fun cueOnlySharesMidpointWhenPaddingWouldOverlap() {
+        val result = Segmenter.cueOnly(
+            listOf(SrtCue(1, 1_000, 2_000, "A"), SrtCue(2, 2_300, 3_000, "B")),
+            5_000, 500, 500
+        )
+        assertEquals(2_150, result.first().endMs)
+        assertEquals(2_150, result.last().startMs)
+    }
+
+    @Test fun cueOnlyPaddingNeverCreatesOverlap() {
+        val result = Segmenter.cueOnly(
+            listOf(
+                SrtCue(1, 1_000, 2_000, "A"),
+                SrtCue(2, 2_001, 3_000, "B"),
+                SrtCue(3, 3_100, 4_000, "C"),
+                SrtCue(4, 8_000, 9_000, "D")
+            ),
+            10_000, 800, 800
+        )
+        assertTrue(result.zipWithNext().all { (previous, next) -> previous.endMs <= next.startMs })
+    }
+
+    @Test fun cueOnlyMergesOriginalOverlapBeforeApplyingPadding() {
+        val result = Segmenter.cueOnly(
+            listOf(
+                SrtCue(1, 1_000, 3_000, "A"),
+                SrtCue(2, 2_500, 4_000, "B"),
+                SrtCue(3, 5_000, 6_000, "C")
+            ),
+            8_000, 300, 500
+        )
+        assertEquals(2, result.size)
+        assertEquals("A\nB", result.first().text)
+        assertEquals(700, result.first().startMs)
+        assertEquals(4_500, result.first().endMs)
+        assertEquals(4_700, result.last().startMs)
+    }
+
+    @Test fun cueOnlyNegativePaddingIsTreatedAsZero() {
+        val result = Segmenter.cueOnly(
+            listOf(SrtCue(1, 1_000, 2_000, "A")), 4_000, -300, -500
+        )
+        assertEquals(1_000, result.single().startMs)
+        assertEquals(2_000, result.single().endMs)
+    }
+
+    @Test fun cueOnlyIgnoresBlankAndInvalidCuesBeforePadding() {
+        val result = Segmenter.cueOnly(
+            listOf(
+                SrtCue(1, 500, 1_000, "  "),
+                SrtCue(2, 2_000, 1_000, "invalid"),
+                SrtCue(3, 3_000, 4_000, "valid")
+            ),
+            5_000, 300, 500
+        )
+        assertEquals(1, result.size)
+        assertEquals(2_700, result.single().startMs)
+        assertEquals(4_500, result.single().endMs)
+    }}

@@ -3,6 +3,7 @@ package com.echoenglish.app.ui
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -166,13 +167,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 dao.update(updated)
             }
         }
+        val paddingChanged = (previous.leadInMs != value.leadInMs ||
+            previous.leadOutMs != value.leadOutMs) &&
+            value.segmentMode == SegmentMode.SUBTITLE &&
+            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY
         if (mutableCurrent.value != null && (
                 previous.segmentSeconds != value.segmentSeconds ||
                     previous.segmentMode != value.segmentMode ||
-                    previous.subtitlePlaybackScope != value.subtitlePlaybackScope
+                    previous.subtitlePlaybackScope != value.subtitlePlaybackScope ||
+                    paddingChanged
                 )
         ) {
-            rebuildActiveSegments(value)
+            rebuildActiveSegments(value, alignToSegmentStart = paddingChanged)
         }
         if (previous.repeatCount != value.repeatCount) {
             sendService(Intent(app, PlaybackService::class.java).apply {
@@ -194,7 +200,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun rebuildActiveSegments(value: PlaybackSettings) {
+    private fun rebuildActiveSegments(
+        value: PlaybackSettings,
+        alignToSegmentStart: Boolean = false
+    ) {
         val track = mutableCurrent.value ?: return
         if (value.segmentMode == SegmentMode.SUBTITLE &&
             Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
@@ -207,6 +216,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         currentSegments = buildSegments(value, track.durationMs)
         if (currentSegments.isEmpty()) return
+        val currentPosition = playback.value.positionMs
+        val targetPosition = if (alignToSegmentStart) {
+            val index = currentSegments.indexOfLast { currentPosition >= it.startMs }
+                .coerceIn(0, currentSegments.lastIndex)
+            currentSegments[index].startMs
+        } else {
+            currentPosition
+        }
         sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_UPDATE_SEGMENTS
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
@@ -216,16 +233,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
                 shouldSkipSubtitleGaps(value, track.durationMs)
             )
-            putExtra(PlaybackContract.EXTRA_POSITION, playback.value.positionMs)
+            putExtra(PlaybackContract.EXTRA_POSITION, targetPosition)
         })
     }
 
     private fun buildSegments(value: PlaybackSettings, durationMs: Long): List<Segment> {
         if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isNotEmpty()) {
             return if (value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY) {
-                Segmenter.cueOnly(currentCues, durationMs)
+                Segmenter.cueOnly(
+                    currentCues,
+                    durationMs,
+                    value.leadInMs,
+                    value.leadOutMs
+                ).also { finalSegments ->
+                    Log.i(
+                        "EchoSegments",
+                        "mode=SUBTITLE scope=CUES_ONLY leadInMs=${value.leadInMs} " +
+                            "leadOutMs=${value.leadOutMs} originalCues=${currentCues.size} " +
+                            "finalSegments=${finalSegments.size} firstOriginal=${currentCues.firstOrNull()} " +
+                            "firstFinal=${finalSegments.firstOrNull()}"
+                    )
+                }
             } else {
-                Segmenter.fromCues(currentCues, durationMs, value.leadInMs, value.leadOutMs)
+                Segmenter.fromCues(currentCues, durationMs)
             }
         }
         return Segmenter.fixed(durationMs, value.segmentSeconds * 1000L).map { segment ->

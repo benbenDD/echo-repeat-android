@@ -10,4 +10,9 @@ class PlaybackSettingsTest {
             PlaybackSettings().subtitlePlaybackScope
         )
     }
-}
+
+    @Test fun subtitlePaddingDefaultsAreSafeForSpeechBoundaries() {
+        val settings = PlaybackSettings()
+        assertEquals(300, settings.leadInMs)
+        assertEquals(500, settings.leadOutMs)
+    }}

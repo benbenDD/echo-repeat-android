@@ -1087,9 +1087,15 @@ class PlaybackService : MediaSessionService() {
         } else {
             position
         }
-        val cueIndex = PlaybackMath.subtitleIndexAt(cueStarts, subtitlePosition)
-        val currentText = cueTexts.getOrElse(cueIndex) {
-            texts.getOrElse(segmentIndex) { "" }
+        val timelineCueIndex = PlaybackMath.subtitleIndexAt(cueStarts, subtitlePosition)
+        val segmentCueIndex = cueStarts.indices.firstOrNull { index ->
+            cueStarts[index] < end && cueEnds.getOrElse(index) { cueStarts[index] } > start
+        }
+        val cueIndex = if (skipSubtitleGaps) segmentCueIndex ?: timelineCueIndex else timelineCueIndex
+        val currentText = if (skipSubtitleGaps) {
+            texts.getOrElse(segmentIndex) { cueTexts.getOrElse(cueIndex) { "" } }
+        } else {
+            cueTexts.getOrElse(cueIndex) { texts.getOrElse(segmentIndex) { "" } }
         }
         val nextText = cueTexts.getOrElse(cueIndex + 1) {
             texts.getOrElse(segmentIndex + 1) { "" }

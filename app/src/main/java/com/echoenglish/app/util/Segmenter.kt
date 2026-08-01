@@ -52,7 +52,12 @@ object Segmenter {
         }
     }
 
-    fun cueOnly(cues: List<SrtCue>, durationMs: Long): List<Segment> {
+    fun cueOnly(
+        cues: List<SrtCue>,
+        durationMs: Long,
+        leadInMs: Long = 0,
+        leadOutMs: Long = 0
+    ): List<Segment> {
         if (durationMs <= 0) return emptyList()
         val normalized = cues.mapNotNull { cue ->
             val text = cue.text.trim()
@@ -77,8 +82,32 @@ object Segmenter {
                 )
             }
         }
-        return result
+        if (result.isEmpty()) return emptyList()
+
+        val before = leadInMs.coerceIn(0L, MAX_CUE_PADDING_MS)
+        val after = leadOutMs.coerceIn(0L, MAX_CUE_PADDING_MS)
+        if (before == 0L && after == 0L) return result
+
+        val starts = result.map { (it.startMs - before).coerceAtLeast(0L) }.toMutableList()
+        val ends = result.map { (it.endMs + after).coerceAtMost(durationMs) }.toMutableList()
+
+        for (index in 0 until result.lastIndex) {
+            if (ends[index] > starts[index + 1]) {
+                val originalGap = result[index + 1].startMs - result[index].endMs
+                val sharedBoundary = result[index].endMs + originalGap / 2
+                ends[index] = sharedBoundary
+                starts[index + 1] = sharedBoundary
+            }
+        }
+
+        return result.indices.mapNotNull { index ->
+            val start = starts[index]
+            val end = ends[index]
+            if (end > start) result[index].copy(startMs = start, endMs = end) else null
+        }
     }
+
+    private const val MAX_CUE_PADDING_MS = 5_000L
 
     fun normalize(
         segments: List<Segment>,

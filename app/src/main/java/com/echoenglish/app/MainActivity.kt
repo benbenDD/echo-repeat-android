@@ -442,9 +442,8 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                     Text(state.subtitle.ifBlank { "当前音频暂无字幕" }, color = Ink, fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 }
             } else if (!expanded) {
-                val cue = state.subtitles.getOrNull(state.subtitleIndex)
                 Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 5.dp), contentAlignment = Alignment.Center) {
-                    Text(cue?.text ?: "字幕即将开始…", color = Ink, fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text(state.subtitle.ifBlank { "字幕即将开始…" }, color = Ink, fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 if (userBrowsing) {
@@ -556,6 +555,39 @@ private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings)
                     value.subtitlePlaybackScope,
                     enabled
                 ) { onChange(value.copy(subtitlePlaybackScope = it)) }
+            }
+        }
+        if (
+            value.segmentMode == SegmentMode.SUBTITLE &&
+            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY
+        ) {
+            item {
+                SettingCard(
+                    "字幕前置补偿",
+                    RoundedGlyphKind.LEAD_IN,
+                    Coral,
+                    CoralLight,
+                    hint = "在字幕时间点前提前播放，避免句首辅音被切掉"
+                ) {
+                    ChoiceGrid(
+                        listOf("0ms" to 0L, "0.2秒" to 200L, "0.3秒" to 300L, "0.5秒" to 500L, "0.8秒" to 800L),
+                        value.leadInMs
+                    ) { onChange(value.copy(leadInMs = it)) }
+                }
+            }
+            item {
+                SettingCard(
+                    "字幕后置补偿",
+                    RoundedGlyphKind.LEAD_OUT,
+                    Color(0xFF287EBC),
+                    SkyLight,
+                    hint = "在字幕结束后继续播放，保留句尾与自然收音"
+                ) {
+                    ChoiceGrid(
+                        listOf("0ms" to 0L, "0.2秒" to 200L, "0.3秒" to 300L, "0.5秒" to 500L, "0.8秒" to 800L),
+                        value.leadOutMs
+                    ) { onChange(value.copy(leadOutMs = it)) }
+                }
             }
         }
         item {
