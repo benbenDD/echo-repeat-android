@@ -31,6 +31,7 @@ object PlaybackContract {
     const val EXTRA_INDEX = "index"
     const val EXTRA_SPEED = "speed"
     const val EXTRA_POSITION = "position"
+    const val EXTRA_PRESERVE_POSITION = "preserve_position"
     const val EXTRA_DURATION = "duration"
     const val EXTRA_TIMER_MINUTES = "timer_minutes"
     const val EXTRA_STOP_AT_END = "stop_at_end"

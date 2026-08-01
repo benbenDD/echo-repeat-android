@@ -174,7 +174,7 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = Screen.LIBRARY }
                 )
-                Screen.SETTINGS -> SettingsScreen(settings, vm::updateSettings)
+                Screen.SETTINGS -> SettingsScreen(settings, current, vm::updateSettings, vm::updateSubtitleOffset)
             }
         }
     }
@@ -529,12 +529,82 @@ private fun SleepTimerDialog(onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
     )
 }
 
+
+private fun formatSubtitleOffset(offsetMs: Long): String {
+    if (offsetMs == 0L) return "不调整"
+    val absolute = kotlin.math.abs(offsetMs)
+    val seconds = if (absolute % 1_000L == 0L) {
+        "${absolute / 1_000L}秒"
+    } else {
+        "${absolute / 1_000.0}秒"
+    }
+    return if (offsetMs < 0L) "提前 $seconds" else "延后 $seconds"
+}
 @Composable
-private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings) -> Unit) {
+private fun SettingsScreen(
+    value: PlaybackSettings,
+    currentTrack: TrackEntity?,
+    onChange: (PlaybackSettings) -> Unit,
+    onSubtitleOffsetChange: (Long) -> Unit
+) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("学习设置", fontSize = 29.sp, fontWeight = FontWeight.Black, color = Ink)
             Text("每次调整都会立即应用到当前音频", color = MutedInk, fontSize = 14.sp)
+        }
+        item {
+            val enabled = currentTrack?.subtitleUri != null
+            val offsetMs = currentTrack?.subtitleOffsetMs ?: 0L
+            SettingCard(
+                "字幕同步校准",
+                RoundedGlyphKind.SYNC,
+                Color(0xFF287EBC),
+                SkyLight,
+                enabled,
+                if (enabled) "字幕比声音早请选择延后，字幕比声音晚请选择提前" else "请先打开一个带字幕的音频"
+            ) {
+                Text(
+                    "当前：${formatSubtitleOffset(offsetMs)}",
+                    color = if (offsetMs == 0L) MutedInk else Purple,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(Modifier.height(8.dp))
+                ChoiceGrid(
+                    listOf(
+                        "提前2秒" to -2_000L,
+                        "提前1秒" to -1_000L,
+                        "提前0.5秒" to -500L,
+                        "不调整" to 0L,
+                        "延后0.5秒" to 500L,
+                        "延后1秒" to 1_000L,
+                        "延后2秒" to 2_000L
+                    ),
+                    offsetMs,
+                    enabled
+                ) { onSubtitleOffsetChange(it) }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { onSubtitleOffsetChange((offsetMs - 100L).coerceAtLeast(-10_000L)) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        shape = ControlShape
+                    ) { Text("提前0.1秒", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = { onSubtitleOffsetChange(0L) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        shape = ControlShape
+                    ) { Text("恢复为0", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = { onSubtitleOffsetChange((offsetMs + 100L).coerceAtMost(10_000L)) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        shape = ControlShape
+                    ) { Text("延后0.1秒", fontSize = 12.sp) }
+                }
+            }
         }
         item { SettingCard("分段方式", RoundedGlyphKind.CUT, Purple, PurpleLight) { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
         item {

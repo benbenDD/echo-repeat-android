@@ -1,10 +1,15 @@
-﻿package com.echoenglish.app.data
+package com.echoenglish.app.data
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
-class AppDatabase(context: Context) : SQLiteOpenHelper(context, "echo-english.db", null, 1) {
+class AppDatabase(context: Context) : SQLiteOpenHelper(
+    context,
+    "echo-english.db",
+    null,
+    DatabaseSchema.VERSION
+) {
     val trackDao: TrackDao by lazy { TrackDao(this) }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -14,6 +19,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, "echo-english.db
             fileName TEXT NOT NULL,
             title TEXT NOT NULL,
             subtitleUri TEXT,
+            subtitleOffsetMs INTEGER NOT NULL DEFAULT 0,
             durationMs INTEGER NOT NULL,
             currentPositionMs INTEGER NOT NULL,
             currentSegment INTEGER NOT NULL,
@@ -29,5 +35,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(context, "echo-english.db
         )""")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL(DatabaseSchema.MIGRATION_1_TO_2)
+    }
 }

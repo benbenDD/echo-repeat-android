@@ -605,6 +605,9 @@ class PlaybackService : MediaSessionService() {
             PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
             false
         )
+        intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_STARTS)?.let { cueStarts = it }
+        intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_ENDS)?.let { cueEnds = it }
+        intent.getStringArrayExtra(PlaybackContract.EXTRA_CUE_TEXTS)?.let { cueTexts = it }
         val target = PlaybackMath.snapToPlayablePosition(
             starts,
             ends,
@@ -616,11 +619,19 @@ class PlaybackService : MediaSessionService() {
         repeatIndex = 1
         completed = false
         rebuildCaches()
-        val alignedTarget = SegmentPlaybackPolicy.alignedInitialPosition(
-            requestedPositionMs = target,
-            segmentStartMs = starts[segmentIndex],
-            repeatCount = repeatCount
+        val preservePosition = intent.getBooleanExtra(
+            PlaybackContract.EXTRA_PRESERVE_POSITION,
+            false
         )
+        val alignedTarget = if (preservePosition) {
+            target
+        } else {
+            SegmentPlaybackPolicy.alignedInitialPosition(
+                requestedPositionMs = target,
+                segmentStartMs = starts[segmentIndex],
+                repeatCount = repeatCount
+            )
+        }
         startPlaybackAt(alignedTarget, continuePlaying)
         publish()
     }

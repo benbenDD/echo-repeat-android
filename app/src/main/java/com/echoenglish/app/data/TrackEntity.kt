@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.data
+package com.echoenglish.app.data
 
 data class TrackEntity(
     val id: Long = 0,
@@ -6,6 +6,7 @@ data class TrackEntity(
     val fileName: String,
     val title: String,
     val subtitleUri: String? = null,
+    val subtitleOffsetMs: Long = 0,
     val durationMs: Long = 0,
     val currentPositionMs: Long = 0,
     val currentSegment: Int = 0,

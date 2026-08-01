@@ -22,6 +22,7 @@ enum class RoundedGlyphKind {
     TIMER,
     REPEAT,
     SUBTITLES,
+    SYNC,
     LEAD_IN,
     LEAD_OUT,
     GAP,
@@ -92,6 +93,23 @@ fun RoundedGlyph(
                 drawLine(tint, p(14f, 11f), p(18f, 11f), line, StrokeCap.Round)
                 drawLine(tint, p(6f, 15f), p(12f, 15f), line, StrokeCap.Round)
                 drawLine(tint, p(15f, 15f), p(18f, 15f), line, StrokeCap.Round)
+            }
+
+            RoundedGlyphKind.SYNC -> {
+                drawRoundRect(
+                    tint,
+                    p(3f, 3.5f),
+                    Size(18f * s, 11f * s),
+                    CornerRadius(3f * s),
+                    style = stroke
+                )
+                drawLine(tint, p(6f, 8f), p(10f, 8f), line, StrokeCap.Round)
+                drawLine(tint, p(14f, 8f), p(18f, 8f), line, StrokeCap.Round)
+                drawLine(tint, p(6f, 19f), p(18f, 19f), line, StrokeCap.Round)
+                drawLine(tint, p(6f, 19f), p(8.5f, 16.5f), line, StrokeCap.Round)
+                drawLine(tint, p(6f, 19f), p(8.5f, 21.5f), line, StrokeCap.Round)
+                drawLine(tint, p(18f, 19f), p(15.5f, 16.5f), line, StrokeCap.Round)
+                drawLine(tint, p(18f, 19f), p(15.5f, 21.5f), line, StrokeCap.Round)
             }
 
             RoundedGlyphKind.LEAD_IN -> {

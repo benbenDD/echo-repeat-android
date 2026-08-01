@@ -23,12 +23,15 @@ import com.echoenglish.app.playback.PlaybackServicePolicy
 import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
+import com.echoenglish.app.util.SubtitleTiming
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as EchoEnglishApp
@@ -42,8 +45,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val current = mutableCurrent.asStateFlow()
     private val mutableMessage = MutableStateFlow<String?>(null)
     val message = mutableMessage.asStateFlow()
+    private var originalCues: List<SrtCue> = emptyList()
     private var currentCues: List<SrtCue> = emptyList()
+    private var currentSubtitleOffsetMs = 0L
     private var currentSegments: List<Segment> = emptyList()
+    private val subtitleOffsetWriteMutex = Mutex()
     private var completionHandled = false
     private var lastPlaybackError = ""
 
@@ -93,7 +99,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTrack(track: TrackEntity) = viewModelScope.launch {
         val activeSettings = mutableSettings.value
-        currentCues = readCues(track)
+        originalCues = readCues(track)
+        currentSubtitleOffsetMs = SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)
+        currentCues = SubtitleTiming.adjustCues(
+            originalCues,
+            currentSubtitleOffsetMs,
+            track.durationMs
+        )
         if (activeSettings.segmentMode == SegmentMode.SUBTITLE &&
             Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
         ) {
@@ -229,6 +241,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
             putExtra(
                 PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
                 shouldSkipSubtitleGaps(value, track.durationMs)
@@ -248,9 +263,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ).also { finalSegments ->
                     Log.i(
                         "EchoSegments",
-                        "mode=SUBTITLE scope=CUES_ONLY leadInMs=${value.leadInMs} " +
-                            "leadOutMs=${value.leadOutMs} originalCues=${currentCues.size} " +
-                            "finalSegments=${finalSegments.size} firstOriginal=${currentCues.firstOrNull()} " +
+                        "mode=SUBTITLE scope=CUES_ONLY subtitleOffsetMs=$currentSubtitleOffsetMs " +
+                            "leadInMs=${value.leadInMs} leadOutMs=${value.leadOutMs} " +
+                            "originalCues=${originalCues.size} adjustedCues=${currentCues.size} " +
+                            "finalSegments=${finalSegments.size} firstOriginal=${originalCues.firstOrNull()} " +
                             "firstFinal=${finalSegments.firstOrNull()}"
                     )
                 }
@@ -272,6 +288,105 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun readCues(track: TrackEntity): List<SrtCue> = track.subtitleUri?.let { uri ->
         runCatching { app.contentResolver.openInputStream(Uri.parse(uri))?.use(SrtParser::parse) }.getOrNull()
     }.orEmpty()
+
+    fun updateSubtitleOffset(requestedOffsetMs: Long) {
+        val track = mutableCurrent.value ?: run {
+            mutableMessage.value = "请先从播放列表打开一个音频"
+            return
+        }
+        if (track.subtitleUri == null) {
+            mutableMessage.value = "当前音频没有匹配字幕，无法调整字幕时间"
+            return
+        }
+        val normalizedOffsetMs = SubtitleTiming.normalizedOffsetMs(requestedOffsetMs)
+        if (normalizedOffsetMs == currentSubtitleOffsetMs) return
+
+        val state = playback.value
+        val previousCues = currentCues
+        val previousSegments = currentSegments
+        val activeSegment = previousSegments.getOrNull(state.segmentIndex)
+        val activeCueIndex = activeSegment?.let { segment ->
+            previousCues.firstOrNull { cue ->
+                cue.startMs < segment.endMs && cue.endMs > segment.startMs
+            }?.index
+        } ?: previousCues.lastOrNull { it.startMs <= state.positionMs }?.index
+
+        currentSubtitleOffsetMs = normalizedOffsetMs
+        currentCues = SubtitleTiming.adjustCues(
+            originalCues,
+            currentSubtitleOffsetMs,
+            track.durationMs
+        )
+        val updatedTrack = track.copy(subtitleOffsetMs = currentSubtitleOffsetMs)
+        mutableCurrent.value = updatedTrack
+        viewModelScope.launch {
+            subtitleOffsetWriteMutex.withLock {
+                dao.updateSubtitleOffset(updatedTrack.id, updatedTrack.subtitleOffsetMs)
+            }
+        }
+
+        val activeSettings = mutableSettings.value
+        currentSegments = buildSegments(activeSettings, track.durationMs)
+        if (currentSegments.isEmpty()) {
+            mutableMessage.value = "字幕校准后无法生成有效播放片段"
+            return
+        }
+
+        val targetPosition = if (activeSettings.segmentMode == SegmentMode.SUBTITLE) {
+            val adjustedCue = currentCues.firstOrNull { it.index == activeCueIndex }
+            val adjustedSegment = adjustedCue?.let { cue ->
+                currentSegments.firstOrNull { segment ->
+                    cue.startMs < segment.endMs && cue.endMs > segment.startMs
+                }
+            }
+            adjustedSegment?.startMs
+                ?: currentSegments.getOrNull(state.segmentIndex)?.startMs
+                ?: state.positionMs
+        } else {
+            state.positionMs
+        }
+
+        sendService(Intent(app, PlaybackService::class.java).apply {
+            action = PlaybackContract.ACTION_UPDATE_SEGMENTS
+            putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
+            putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
+            putExtra(
+                PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
+                shouldSkipSubtitleGaps(activeSettings, track.durationMs)
+            )
+            putExtra(PlaybackContract.EXTRA_POSITION, targetPosition)
+            putExtra(
+                PlaybackContract.EXTRA_PRESERVE_POSITION,
+                activeSettings.segmentMode == SegmentMode.FIXED
+            )
+        })
+
+        Log.i(
+            "EchoSubtitleTiming",
+            "trackId=${track.id} subtitleOffsetMs=$currentSubtitleOffsetMs " +
+                "originalCueCount=${originalCues.size} adjustedCueCount=${currentCues.size} " +
+                "originalFirst=${originalCues.firstOrNull()} adjustedFirst=${currentCues.firstOrNull()} " +
+                "segmentMode=${activeSettings.segmentMode} " +
+                "subtitlePlaybackScope=${activeSettings.subtitlePlaybackScope} " +
+                "leadInMs=${activeSettings.leadInMs} leadOutMs=${activeSettings.leadOutMs} " +
+                "finalSegment=${currentSegments.getOrNull(state.segmentIndex)} targetPosition=$targetPosition"
+        )
+        val absoluteOffset = kotlin.math.abs(currentSubtitleOffsetMs)
+        val offsetLabel = if (absoluteOffset % 1_000L == 0L) {
+            "${absoluteOffset / 1_000L}秒"
+        } else {
+            "${absoluteOffset / 1_000.0}秒"
+        }
+        mutableMessage.value = when {
+            currentSubtitleOffsetMs < 0 -> "字幕已提前 $offsetLabel"
+            currentSubtitleOffsetMs > 0 -> "字幕已延后 $offsetLabel"
+            else -> "字幕时间已恢复为不调整"
+        }
+    }
 
     fun setSleepTimer(minutes: Int) {
         sendService(Intent(app, PlaybackService::class.java).apply {
