@@ -24,6 +24,9 @@ data class PlaybackSnapshot(
     val segments: List<SegmentSnapshot> = emptyList(),
     val subtitles: List<SubtitleSnapshot> = emptyList(),
     val sleepDeadlineMs: Long = 0,
+    val isInSegmentGap: Boolean = false,
+    val isSegmentGapPaused: Boolean = false,
+    val segmentGapRemainingMs: Long = 0,
     val completed: Boolean = false,
     val errorMessage: String = ""
 ) {

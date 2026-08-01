@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.data
+package com.echoenglish.app.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.*
@@ -14,6 +14,7 @@ class SettingsRepository(private val context: Context) {
         val MODE = stringPreferencesKey("segment_mode")
         val SECONDS = intPreferencesKey("segment_seconds")
         val REPEATS = intPreferencesKey("repeat_count")
+        val GAP_MS = longPreferencesKey("segment_gap_ms")
         val SPEED = floatPreferencesKey("speed")
         val LEAD_IN = longPreferencesKey("lead_in")
         val LEAD_OUT = longPreferencesKey("lead_out")
@@ -27,6 +28,7 @@ class SettingsRepository(private val context: Context) {
             segmentMode = runCatching { SegmentMode.valueOf(p[Keys.MODE] ?: "FIXED") }.getOrDefault(SegmentMode.FIXED),
             segmentSeconds = p[Keys.SECONDS] ?: 15,
             repeatCount = p[Keys.REPEATS] ?: 3,
+            segmentGapMs = (p[Keys.GAP_MS] ?: 0L).coerceIn(0L, 5_000L),
             speed = p[Keys.SPEED] ?: 1f,
             leadInMs = p[Keys.LEAD_IN] ?: 300,
             leadOutMs = p[Keys.LEAD_OUT] ?: 500,
@@ -41,6 +43,7 @@ class SettingsRepository(private val context: Context) {
         p[Keys.MODE] = value.segmentMode.name
         p[Keys.SECONDS] = value.segmentSeconds
         p[Keys.REPEATS] = value.repeatCount
+        p[Keys.GAP_MS] = value.segmentGapMs.coerceIn(0L, 5_000L)
         p[Keys.SPEED] = value.speed
         p[Keys.LEAD_IN] = value.leadInMs
         p[Keys.LEAD_OUT] = value.leadOutMs

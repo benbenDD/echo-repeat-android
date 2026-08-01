@@ -18,6 +18,7 @@ import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackService
 import com.echoenglish.app.playback.PlaybackServicePolicy
+import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
 import kotlinx.coroutines.delay
@@ -112,6 +113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
+            putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
             putExtra(PlaybackContract.EXTRA_INDEX, targetSegment)
             putExtra(PlaybackContract.EXTRA_POSITION, track.currentPositionMs)
             putExtra(PlaybackContract.EXTRA_SPEED, activeSettings.speed)
@@ -156,6 +158,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sendService(Intent(app, PlaybackService::class.java).apply {
                 action = PlaybackContract.ACTION_UPDATE_REPEATS
                 putExtra(PlaybackContract.EXTRA_REPEATS, value.repeatCount)
+            })
+        }
+        if (previous.segmentGapMs != value.segmentGapMs) {
+            sendService(Intent(app, PlaybackService::class.java).apply {
+                action = PlaybackContract.ACTION_UPDATE_GAP
+                putExtra(PlaybackContract.EXTRA_GAP_MS, value.segmentGapMs)
             })
         }
         if (previous.speed != value.speed) {
@@ -221,11 +229,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val list = tracks.value
         val currentTrack = mutableCurrent.value ?: return
         val index = list.indexOfFirst { it.id == currentTrack.id }
-        when (mutableSettings.value.playlistMode) {
-            PlaylistMode.STOP_AFTER_TRACK -> Unit
-            PlaylistMode.SEQUENTIAL -> list.getOrNull(index + 1)?.let { openTrack(it) }
-            PlaylistMode.LOOP_LIST -> if (list.isNotEmpty()) openTrack(list[(index + 1).mod(list.size)])
-        }
+        PlaylistNavigation.nextIndex(mutableSettings.value.playlistMode, index, list.size)
+            ?.let { nextIndex -> list.getOrNull(nextIndex)?.let { openTrack(it) } }
     }
 }
 

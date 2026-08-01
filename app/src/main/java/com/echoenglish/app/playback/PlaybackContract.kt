@@ -1,6 +1,7 @@
 package com.echoenglish.app.playback
 
 object PlaybackContract {
+    const val ACTION_OPEN_PLAYER = "com.echoenglish.OPEN_PLAYER"
     const val ACTION_LOAD = "com.echoenglish.LOAD"
     const val ACTION_TOGGLE = "com.echoenglish.TOGGLE"
     const val ACTION_NEXT = "com.echoenglish.NEXT_SEGMENT"
@@ -11,6 +12,7 @@ object PlaybackContract {
     const val ACTION_SEEK_SEGMENT = "com.echoenglish.SEEK_SEGMENT"
     const val ACTION_UPDATE_SEGMENTS = "com.echoenglish.UPDATE_SEGMENTS"
     const val ACTION_UPDATE_REPEATS = "com.echoenglish.UPDATE_REPEATS"
+    const val ACTION_UPDATE_GAP = "com.echoenglish.UPDATE_GAP"
     const val ACTION_UPDATE_SPEED = "com.echoenglish.UPDATE_SPEED"
     const val ACTION_TIMER = "com.echoenglish.TIMER"
     const val ACTION_CANCEL_TIMER = "com.echoenglish.CANCEL_TIMER"
@@ -24,6 +26,7 @@ object PlaybackContract {
     const val EXTRA_CUE_ENDS = "cue_ends"
     const val EXTRA_CUE_TEXTS = "cue_texts"
     const val EXTRA_REPEATS = "repeats"
+    const val EXTRA_GAP_MS = "segment_gap_ms"
     const val EXTRA_INDEX = "index"
     const val EXTRA_SPEED = "speed"
     const val EXTRA_POSITION = "position"

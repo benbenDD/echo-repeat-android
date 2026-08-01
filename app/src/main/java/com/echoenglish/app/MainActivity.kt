@@ -1,6 +1,7 @@
 package com.echoenglish.app
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -53,6 +54,8 @@ import com.echoenglish.app.ui.MainViewModel
 import com.echoenglish.app.util.SelectionLogic
 import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 
 private val Ink = Color(0xFF263B41)
@@ -78,9 +81,20 @@ private val ControlShape = RoundedCornerShape(15.dp)
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
 
 class MainActivity : ComponentActivity() {
+    private val openPlayerRequests = MutableStateFlow(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { EchoTheme { EchoEnglishUi() } }
+        if (intent?.action == PlaybackContract.ACTION_OPEN_PLAYER) openPlayerRequests.value = 1
+        setContent { EchoTheme { EchoEnglishUi(openPlayerRequests) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == PlaybackContract.ACTION_OPEN_PLAYER) {
+            openPlayerRequests.value = openPlayerRequests.value + 1
+        }
     }
 }
 
@@ -106,12 +120,13 @@ private fun EchoTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun EchoEnglishUi(vm: MainViewModel = viewModel()) {
+private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel = viewModel()) {
     val tracks by vm.tracks.collectAsState()
     val current by vm.current.collectAsState()
     val playback by vm.playback.collectAsState()
     val settings by vm.settings.collectAsState()
     val message by vm.message.collectAsState()
+    val openPlayerRequest by openPlayerRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -124,6 +139,9 @@ private fun EchoEnglishUi(vm: MainViewModel = viewModel()) {
     }
     LaunchedEffect(message) {
         message?.let { snackbar.showSnackbar(it); vm.clearMessage() }
+    }
+    LaunchedEffect(openPlayerRequest) {
+        if (openPlayerRequest > 0) screen = Screen.PLAYER
     }
 
     Scaffold(
@@ -324,6 +342,13 @@ private fun PlayerScreen(
             Spacer(Modifier.weight(1f))
             TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) { Text("定位片段", color = Purple, fontWeight = FontWeight.Bold) }
         }
+        if (state.isInSegmentGap) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                InfoPill(if (state.isSegmentGapPaused) "间隔已暂停" else "间隔中", SkyLight, Color(0xFF287EBC))
+                Spacer(Modifier.width(7.dp))
+                Text(String.format("剩余 %.1f 秒", state.segmentGapRemainingMs / 1000f), color = MutedInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         Surface(Modifier.fillMaxWidth(), shape = CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
                 ProgressBlock("本段进度", segmentDrag ?: relative.toFloat(), segmentDuration.toFloat(), formatTime((segmentDrag ?: relative.toFloat()).toLong()), formatTime(segmentDuration), state.segmentCount > 0, Coral, { segmentDrag = it }) {
@@ -500,6 +525,7 @@ private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings)
             }
         }
         item { SettingCard("每段重复", Icons.Rounded.Refresh, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
+        item { SettingCard("分段间隔", Icons.Rounded.DateRange, Color(0xFF287EBC), SkyLight, hint = "每次复读之间和进入下一段前保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
         item { SettingCard("播放速度", Icons.Rounded.PlayArrow, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
         item { SettingCard("列表播放", Icons.Rounded.List, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
         item { SettingCard("定时到点", Icons.Rounded.DateRange, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }

@@ -1,4 +1,4 @@
-﻿package com.echoenglish.app.model
+package com.echoenglish.app.model
 
 data class SrtCue(val index: Int, val startMs: Long, val endMs: Long, val text: String)
 data class Segment(val startMs: Long, val endMs: Long, val text: String = "") {
@@ -10,6 +10,7 @@ data class PlaybackSettings(
     val segmentMode: SegmentMode = SegmentMode.FIXED,
     val segmentSeconds: Int = 15,
     val repeatCount: Int = 3,
+    val segmentGapMs: Long = 0,
     val speed: Float = 1f,
     val leadInMs: Long = 300,
     val leadOutMs: Long = 500,
