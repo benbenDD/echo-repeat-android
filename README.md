@@ -1,48 +1,37 @@
-﻿# 回声英语 v1.3.0
+﻿# 回声英语 v1.3.1
 
-## 本次修复：锁屏后台播放
+## 修复内容
 
-代码排查发现，v1.2.0虽然已经使用MediaSessionService并声明了大部分前台服务权限，但仍存在两个关键缺口：ExoPlayer没有启用熄屏播放WakeMode，首次加载音频仍通过普通startService启动。
+v1.3.0调用`ContextCompat.startForegroundService()`后，创建的MediaSession没有注册给MediaSessionService，导致默认媒体通知未建立，系统在约30秒后抛出`ForegroundServiceDidNotStartInTimeException`并销毁应用。
 
-v1.3.0完成以下修改：
+v1.3.1完成以下修复：
 
-- ExoPlayer启用`C.WAKE_MODE_LOCAL`，播放和缓冲时由Media3按需持有CPU WakeLock。
-- 首次加载音频使用`ContextCompat.startForegroundService`启动媒体服务。
-- Manifest确认声明`FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_MEDIA_PLAYBACK`、`WAKE_LOCK`和`POST_NOTIFICATIONS`。
-- PlaybackService声明`android:foregroundServiceType="mediaPlayback"`。
-- 增加MediaSessionService和平台MediaBrowserService入口。
-- 最近任务被划走时，只要播放器正在播放或仍有已加载媒体，就不主动停止服务。
-- MediaItem增加稳定Media ID以及标题、应用名称等元数据，供系统媒体面板和锁屏控制读取。
-- 增加低频生命周期、播放状态和错误日志，日志标签为`EchoPlayback`。
-- 播放错误会同步到应用界面，通过Snackbar提示具体错误代码。
-- 保留导入时的持久URI读取授权。
+- 创建MediaSession后显式调用`addSession(session)`。
+- MediaSessionService能够监听播放器状态并自动建立MediaStyle前台通知。
+- 增加`onUpdateNotification()`诊断日志，记录系统是否要求前台提升。
+- 保留`ContextCompat.startForegroundService()`、`C.WAKE_MODE_LOCAL`、媒体播放服务类型和WakeLock权限。
+- 保留播放列表、字幕、分段复读、总进度、定时关闭和后台播放等功能。
 
 ## 验证结果
 
-- 版本：1.3.0，versionCode 4
+- 版本：1.3.1，versionCode 5
 - 包名：com.echoenglish.app
-- 最低Android版本：Android 8.0（API 26）
-- 自动测试：21项，全部通过
-- Kotlin编译及Debug APK构建通过
-- 合并Manifest中的前台媒体服务、WakeLock及通知声明已核验
-- APK Signature Scheme v2签名
+- 自动测试：21项全部通过
+- APK v2签名有效
+- 已覆盖安装到Xiaomi M2102K1C（Android API 34），应用数据保留
+- 前台持续播放超过2分钟，跨过旧版约30秒崩溃阈值
+- 服务状态：`isForeground=true`
+- 前台媒体通知：ID 1001，类型`mediaPlayback`
+- 真机锁屏并进入Dozing状态后连续观察100秒
+- 锁屏期间PID保持29656，WakeLock和媒体通知持续存在
+- 锁屏测试期间崩溃、前台服务超时和服务销毁计数均为0
 
-## 需要真机确认
+## 仍建议继续观察
 
-当前开发环境不能代替真实手机锁屏，因此尚未声称完成15分钟或30分钟真机锁屏测试。安装后建议依次测试：
-
-1. 播放至少30分钟的本地MP3，锁屏15分钟。
-2. 再锁屏连续播放30分钟。
-3. 分别测试重复1次、3次、0.75x和1.5x。
-4. 锁屏期间检查通知栏或锁屏媒体控制是否持续存在。
-5. 检查定时关闭、耳机拔出和蓝牙断开。
-
-如果仍然中断，可连接ADB执行：
+本轮已完成约100秒真实锁屏测试，但尚未完成15分钟和30分钟长时间测试。建议用户继续播放观察，若再发生中断可执行：
 
 ```text
-adb logcat -s EchoPlayback
-adb shell dumpsys activity services com.echoenglish.app
-adb shell dumpsys media_session
+adb logcat -d -s EchoPlayback
 ```
 
 这是Debug测试版本，正式发布前需要使用独立Release证书签名。

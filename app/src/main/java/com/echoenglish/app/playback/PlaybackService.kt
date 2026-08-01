@@ -75,13 +75,26 @@ class PlaybackService : MediaSessionService() {
             })
         }
         session = MediaSession.Builder(this, player).build()
+        // This service is started by custom playback intents rather than a MediaController.
+        // Register the session explicitly so MediaSessionService observes player state and
+        // promotes itself with its default MediaStyle notification.
+        addSession(session)
+        Log.i(TAG, "MediaSession registered added=${isSessionAdded(session)}")
         val prefs = getSharedPreferences("sleep_timer", MODE_PRIVATE)
         sleepDeadline = prefs.getLong("deadline", 0L).takeIf { it > System.currentTimeMillis() } ?: 0L
         stopAtSegmentEnd = prefs.getBoolean("stop_at_end", true)
         handler.post(ticker)
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession {
+        Log.i(TAG, "onGetSession package=${controllerInfo.packageName} added=${isSessionAdded(session)}")
+        return session
+    }
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        Log.i(TAG, "onUpdateNotification foregroundRequired=$startInForegroundRequired isPlaying=${player.isPlaying}")
+        super.onUpdateNotification(session, startInForegroundRequired)
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action ?: "null"} startId=$startId")
