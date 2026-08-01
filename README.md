@@ -1,37 +1,34 @@
-﻿# 回声英语 v1.3.1
+# 回声英语 v1.4.0
 
-## 修复内容
+回声英语是一款面向英语重复听读的 Android 应用，支持批量导入 MP3 与 SRT、按固定时长或字幕切分、分段重复、自动连播、倍速播放、总进度跳转、片段定位、定时关闭和锁屏后台播放。
 
-v1.3.0调用`ContextCompat.startForegroundService()`后，创建的MediaSession没有注册给MediaSessionService，导致默认媒体通知未建立，系统在约30秒后抛出`ForegroundServiceDidNotStartInTimeException`并销毁应用。
+## v1.4.0 视觉升级
 
-v1.3.1完成以下修复：
+- 底部播放列表、复读、设置导航改为圆角 Material Symbols 图标。
+- 整体采用简洁、可爱、色彩丰富的多巴胺风格，统一紫色、珊瑚色、薄荷色、天蓝色、黄色和粉色语义配色。
+- 资料库改为圆角彩色卡片，并优化批量导入、文件夹导入、空状态和字幕匹配提示。
+- 复读页重新安排字幕、双进度条和播放控制区的视觉层级；保留默认单条字幕、展开滚动字幕和点击跳转。
+- 设置页使用单层卡片和明确的紫色选中态，避免重复边框；按字幕分段时，每段时长选项会自动弱化并禁用。
+- 保留 v1.3.1 已验证的 MediaSession 前台通知、WakeLock 和锁屏后台播放修复。
 
-- 创建MediaSession后显式调用`addSession(session)`。
-- MediaSessionService能够监听播放器状态并自动建立MediaStyle前台通知。
-- 增加`onUpdateNotification()`诊断日志，记录系统是否要求前台提升。
-- 保留`ContextCompat.startForegroundService()`、`C.WAKE_MODE_LOCAL`、媒体播放服务类型和WakeLock权限。
-- 保留播放列表、字幕、分段复读、总进度、定时关闭和后台播放等功能。
+## 构建与验证
 
-## 验证结果
+- versionName：1.4.0
+- versionCode：6
+- minSdk：26
+- targetSdk / compileSdk：34
+- JDK：17
+- 自动测试：21 项全部通过
+- Debug APK：v2 签名验证通过
 
-- 版本：1.3.1，versionCode 5
-- 包名：com.echoenglish.app
-- 自动测试：21项全部通过
-- APK v2签名有效
-- 已覆盖安装到Xiaomi M2102K1C（Android API 34），应用数据保留
-- 前台持续播放超过2分钟，跨过旧版约30秒崩溃阈值
-- 服务状态：`isForeground=true`
-- 前台媒体通知：ID 1001，类型`mediaPlayback`
-- 真机锁屏并进入Dozing状态后连续观察100秒
-- 锁屏期间PID保持29656，WakeLock和媒体通知持续存在
-- 锁屏测试期间崩溃、前台服务超时和服务销毁计数均为0
+## 本地构建
 
-## 仍建议继续观察
+配置 JDK 17 与 Android SDK 后，在项目根目录执行：
 
-本轮已完成约100秒真实锁屏测试，但尚未完成15分钟和30分钟长时间测试。建议用户继续播放观察，若再发生中断可执行：
-
-```text
-adb logcat -d -s EchoPlayback
+```powershell
+.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest
 ```
 
-这是Debug测试版本，正式发布前需要使用独立Release证书签名。
+APK 输出位置：`app/build/outputs/apk/debug/app-debug.apk`。
+
+这是 Debug 测试版本，正式发布前需要使用独立 Release 证书签名。

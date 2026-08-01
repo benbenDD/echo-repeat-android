@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,33 +16,64 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DateRange
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
+import com.echoenglish.app.playback.PlaybackSnapshot
 import com.echoenglish.app.ui.MainViewModel
-import com.echoenglish.app.util.formatTime
 import com.echoenglish.app.util.SelectionLogic
+import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
-private val Ink = Color(0xFF173F49)
-private val Cream = Color(0xFFFFF8F1)
-private val Orange = Color(0xFFF3A85A)
-private val Sage = Color(0xFFBFD8CA)
-private val Purple = Color(0xFF7254C7)
-private val PurpleLight = Color(0xFFEDE7FF)
+private val Ink = Color(0xFF263B41)
+private val MutedInk = Color(0xFF718086)
+private val Cream = Color(0xFFFFF8F2)
+private val Purple = Color(0xFF7657D5)
+private val PurpleLight = Color(0xFFEEE8FF)
+private val Coral = Color(0xFFFF8A65)
+private val CoralLight = Color(0xFFFFE4DA)
+private val Yellow = Color(0xFFFFC94A)
+private val YellowLight = Color(0xFFFFF2C6)
+private val Mint = Color(0xFF58C6A3)
+private val MintLight = Color(0xFFDDF7ED)
+private val Sky = Color(0xFF63B8FF)
+private val SkyLight = Color(0xFFE0F2FF)
+private val Pink = Color(0xFFF783B5)
+private val PinkLight = Color(0xFFFDE3EF)
+private val SoftBorder = Color(0xFFE8E1DC)
+
+private val CardShape = RoundedCornerShape(22.dp)
+private val ControlShape = RoundedCornerShape(15.dp)
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
 
@@ -55,8 +87,20 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun EchoTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = lightColorScheme(primary = Ink, secondary = Orange, background = Cream, surface = Color.White, onPrimary = Color.White),
-        typography = Typography(bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 17.sp)),
+        colorScheme = lightColorScheme(
+            primary = Purple,
+            secondary = Coral,
+            tertiary = Mint,
+            background = Cream,
+            surface = Color.White,
+            onPrimary = Color.White,
+            onBackground = Ink,
+            onSurface = Ink
+        ),
+        typography = Typography(
+            bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 17.sp),
+            titleLarge = androidx.compose.ui.text.TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Black)
+        ),
         content = content
     )
 }
@@ -71,9 +115,10 @@ private fun EchoEnglishUi(vm: MainViewModel = viewModel()) {
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
     val snackbar = remember { SnackbarHostState() }
 
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> vm.importUris(uris) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.importUris(it) }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let(vm::importTree) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
@@ -82,12 +127,13 @@ private fun EchoEnglishUi(vm: MainViewModel = viewModel()) {
     }
 
     Scaffold(
+        containerColor = Cream,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar(containerColor = Color.White) {
-                NavigationBarItem(selected = screen == Screen.LIBRARY, onClick = { screen = Screen.LIBRARY }, icon = { Text("▤") }, label = { Text("播放列表") })
-                NavigationBarItem(selected = screen == Screen.PLAYER, onClick = { screen = Screen.PLAYER }, icon = { Text("▶") }, label = { Text("复读") })
-                NavigationBarItem(selected = screen == Screen.SETTINGS, onClick = { screen = Screen.SETTINGS }, icon = { Text("⚙") }, label = { Text("设置") })
+            NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
+                EchoNavItem(screen == Screen.LIBRARY, { screen = Screen.LIBRARY }, Icons.Rounded.List, "播放列表")
+                EchoNavItem(screen == Screen.PLAYER, { screen = Screen.PLAYER }, Icons.Rounded.PlayArrow, "复读")
+                EchoNavItem(screen == Screen.SETTINGS, { screen = Screen.SETTINGS }, Icons.Rounded.Settings, "设置")
             }
         }
     ) { padding ->
@@ -116,6 +162,23 @@ private fun EchoEnglishUi(vm: MainViewModel = viewModel()) {
 }
 
 @Composable
+private fun RowScope.EchoNavItem(selected: Boolean, onClick: () -> Unit, icon: ImageVector, label: String) {
+    NavigationBarItem(
+        selected = selected,
+        onClick = onClick,
+        icon = { Icon(icon, contentDescription = label, modifier = Modifier.size(25.dp)) },
+        label = { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
+        colors = NavigationBarItemDefaults.colors(
+            selectedIconColor = Purple,
+            selectedTextColor = Purple,
+            indicatorColor = PurpleLight,
+            unselectedIconColor = MutedInk,
+            unselectedTextColor = MutedInk
+        )
+    )
+}
+
+@Composable
 private fun LibraryScreen(
     tracks: List<TrackEntity>,
     onFiles: () -> Unit,
@@ -125,43 +188,99 @@ private fun LibraryScreen(
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
-        Text("回声英语", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
-        Text("把长音频变成可以掌握的小段落", color = Ink.copy(alpha = .7f))
-        Spacer(Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onFiles, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Ink)) { Text("批量导入文件") }
-            OutlinedButton(onClick = onFolder, modifier = Modifier.weight(1f)) { Text("导入文件夹") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("回声英语", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
+                Text("把长音频变成容易掌握的小段落", color = MutedInk, fontSize = 14.sp)
+            }
+            Surface(shape = CircleShape, color = YellowLight, modifier = Modifier.size(52.dp)) {
+                Box(contentAlignment = Alignment.Center) { HeadphonesSymbol(28.dp, Coral) }
+            }
         }
         Spacer(Modifier.height(18.dp))
-        Text("学习列表 · ${tracks.size}", fontWeight = FontWeight.Bold, color = Ink)
-        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onFiles,
+                modifier = Modifier.weight(1f).height(50.dp),
+                shape = ControlShape,
+                colors = ButtonDefaults.buttonColors(containerColor = Purple)
+            ) {
+                UploadSymbol(20.dp, Color.White)
+                Spacer(Modifier.width(7.dp))
+                Text("批量导入文件", fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(
+                onClick = onFolder,
+                modifier = Modifier.weight(1f).height(50.dp),
+                shape = ControlShape,
+                border = androidx.compose.foundation.BorderStroke(1.3.dp, Coral),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Coral)
+            ) {
+                FolderSymbol(20.dp, Coral)
+                Spacer(Modifier.width(7.dp))
+                Text("导入文件夹", fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("学习列表", fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp)
+            Spacer(Modifier.width(8.dp))
+            Surface(shape = CircleShape, color = MintLight) {
+                Text("${tracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
         if (tracks.isEmpty()) {
-            Box(Modifier.fillMaxWidth().padding(top = 60.dp), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("🎧", fontSize = 48.sp)
-                    Spacer(Modifier.height(12.dp))
-                    Text("还没有音频", fontWeight = FontWeight.Bold)
-                    Text("可以同时选择 MP3 与 SRT，文件名相近时会自动匹配", color = Color.Gray)
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
+                shape = CardShape,
+                color = Color.White,
+                border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)
+            ) {
+                Column(Modifier.padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Surface(shape = CircleShape, color = SkyLight, modifier = Modifier.size(76.dp)) {
+                        Box(contentAlignment = Alignment.Center) { MusicSymbol(38.dp, Sky) }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text("还没有音频", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
+                    Spacer(Modifier.height(6.dp))
+                    Text("同时选择 MP3 和 SRT，文件名相近时会自动匹配", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
                 }
             }
-        } else LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-            items(tracks, key = { it.id }) { track -> TrackCard(track, { onOpen(track) }, { onDelete(track) }) }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
+                items(tracks, key = { it.id }) { track -> TrackCard(track, { onOpen(track) }, { onDelete(track) }) }
+            }
         }
     }
 }
 
 @Composable
 private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(48.dp).background(if (track.subtitleUri != null) Sage else Orange.copy(alpha = .35f), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Text(if (track.subtitleUri != null) "SRT" else "MP3", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+    val hasSubtitle = track.subtitleUri != null
+    val badgeColor = if (hasSubtitle) MintLight else CoralLight
+    val badgeInk = if (hasSubtitle) Mint else Coral
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+        color = Color.White,
+        shape = CardShape,
+        border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder),
+        shadowElevation = 1.dp
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(modifier = Modifier.size(50.dp), shape = RoundedCornerShape(16.dp), color = badgeColor) {
+                Box(contentAlignment = Alignment.Center) { MusicSymbol(27.dp, badgeInk) }
+            }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${formatTime(track.durationMs)} · ${if (track.subtitleUri != null) "字幕已匹配" else "固定时长分段"}", color = Color.Gray, fontSize = 13.sp)
-                if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Ink, fontSize = 13.sp)
+                Text(track.title, fontWeight = FontWeight.Black, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(3.dp))
+                Text("${formatTime(track.durationMs)} · ${if (hasSubtitle) "字幕已匹配" else "固定时长分段"}", color = MutedInk, fontSize = 13.sp)
+                if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            TextButton(onClick = onDelete) { Text("移除", color = Color.Gray) }
+            IconButton(onClick = onDelete, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
+                Icon(Icons.Rounded.Delete, contentDescription = "移除 ${track.title}")
+            }
         }
     }
 }
@@ -169,7 +288,7 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
 @Composable
 private fun PlayerScreen(
     title: String,
-    state: com.echoenglish.app.playback.PlaybackSnapshot,
+    state: PlaybackSnapshot,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
     onSeekSegment: (Int) -> Unit,
@@ -182,51 +301,58 @@ private fun PlayerScreen(
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var segmentDrag by remember { mutableStateOf<Float?>(null) }
     var totalDrag by remember { mutableStateOf<Float?>(null) }
-    LaunchedEffect(state.sleepDeadlineMs) { while (state.sleepDeadlineMs > 0) { now = System.currentTimeMillis(); delay(1000) } }
+    LaunchedEffect(state.sleepDeadlineMs) {
+        while (state.sleepDeadlineMs > 0) { now = System.currentTimeMillis(); delay(1000) }
+    }
     val segmentDuration = state.segmentDurationMs.coerceAtLeast(1)
     val relative = state.segmentPositionMs.coerceIn(0, segmentDuration)
     val totalDuration = state.durationMs.coerceAtLeast(1)
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onLibrary) { Text("‹ 列表") }
-            Text(title.ifBlank { "请选择音频" }, Modifier.weight(1f), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            TextButton(onClick = { showTimer = true }) { Text("定时") }
+            IconButton(onClick = onLibrary) { Icon(Icons.Rounded.ArrowBack, contentDescription = "返回播放列表", tint = Ink) }
+            Text(title.ifBlank { "请选择音频" }, Modifier.weight(1f), color = Ink, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            IconButton(onClick = { showTimer = true }) { Icon(Icons.Rounded.DateRange, contentDescription = "定时关闭", tint = Coral) }
         }
-        val subtitleModifier = if (subtitlesExpanded) {
-            Modifier.fillMaxWidth().weight(1f)
-        } else {
-            Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 132.dp)
-        }
-        SubtitlePanel(
-            state = state,
-            modifier = subtitleModifier,
-            expanded = subtitlesExpanded,
-            onExpandedChange = { subtitlesExpanded = it },
-            onSubtitleClick = onSeekAbsolute
-        )
-        Spacer(Modifier.height(7.dp))
+        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 126.dp)
+        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute)
+        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段 · 第 ${state.repeatIndex}/${if (state.repeatCount == 0) "∞" else state.repeatCount} 次", Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Ink, fontSize = 14.sp)
-            TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) { Text("选择片段", color = Purple) }
+            InfoPill("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段", PurpleLight, Purple)
+            Spacer(Modifier.width(6.dp))
+            InfoPill("第 ${state.repeatIndex}/${if (state.repeatCount == 0) "∞" else state.repeatCount} 次", YellowLight, Color(0xFFC38D00))
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { showSegments = true }, enabled = state.segments.isNotEmpty()) { Text("定位片段", color = Purple, fontWeight = FontWeight.Bold) }
         }
-        ProgressBlock("本段进度", segmentDrag ?: relative.toFloat(), segmentDuration.toFloat(), formatTime((segmentDrag ?: relative.toFloat()).toLong()), formatTime(segmentDuration), state.segmentCount > 0, { segmentDrag = it }) {
-            segmentDrag?.let { onCommand(PlaybackContract.ACTION_SEEK, it.toLong()) }; segmentDrag = null
+        Surface(Modifier.fillMaxWidth(), shape = CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                ProgressBlock("本段进度", segmentDrag ?: relative.toFloat(), segmentDuration.toFloat(), formatTime((segmentDrag ?: relative.toFloat()).toLong()), formatTime(segmentDuration), state.segmentCount > 0, Coral, { segmentDrag = it }) {
+                    segmentDrag?.let { onCommand(PlaybackContract.ACTION_SEEK, it.toLong()) }; segmentDrag = null
+                }
+                Spacer(Modifier.height(4.dp))
+                ProgressBlock("总进度", totalDrag ?: state.positionMs.coerceIn(0, totalDuration).toFloat(), totalDuration.toFloat(), formatTime((totalDrag ?: state.positionMs.toFloat()).toLong()), formatTime(state.durationMs), state.durationMs > 0, Purple, { totalDrag = it }) {
+                    totalDrag?.let { onSeekAbsolute(it.toLong()) }; totalDrag = null
+                }
+            }
         }
-        Spacer(Modifier.height(9.dp))
-        ProgressBlock("总进度", totalDrag ?: state.positionMs.coerceIn(0, totalDuration).toFloat(), totalDuration.toFloat(), formatTime((totalDrag ?: state.positionMs.toFloat()).toLong()), formatTime(state.durationMs), state.durationMs > 0, { totalDrag = it }) {
-            totalDrag?.let { onSeekAbsolute(it.toLong()) }; totalDrag = null
-        }
-        Spacer(Modifier.height(11.dp))
+        Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { onCommand(PlaybackContract.ACTION_PREVIOUS, null) }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) { Text("上一段") }
-            FilledIconButton(onClick = { onCommand(PlaybackContract.ACTION_TOGGLE, null) }, modifier = Modifier.size(60.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Orange)) { Text(if (state.isPlaying) "Ⅱ" else "▶", fontSize = 23.sp, color = Ink) }
-            OutlinedButton(onClick = { onCommand(PlaybackContract.ACTION_NEXT, null) }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) { Text("下一段") }
+            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_PREVIOUS, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = SkyLight, contentColor = Ink)) { Text("上一段", fontWeight = FontWeight.Bold) }
+            FilledIconButton(onClick = { onCommand(PlaybackContract.ACTION_TOGGLE, null) }, modifier = Modifier.size(62.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Coral, contentColor = Color.White)) {
+                if (state.isPlaying) PauseSymbol(27.dp, Color.White) else Icon(Icons.Rounded.PlayArrow, contentDescription = "播放", modifier = Modifier.size(34.dp))
+            }
+            FilledTonalButton(onClick = { onCommand(PlaybackContract.ACTION_NEXT, null) }, shape = ControlShape, colors = ButtonDefaults.filledTonalButtonColors(containerColor = MintLight, contentColor = Ink)) { Text("下一段", fontWeight = FontWeight.Bold) }
         }
-        Spacer(Modifier.height(5.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onCommand(PlaybackContract.ACTION_RESTART, null) }) { Text("↻ 重播当前段") }
-            if (state.sleepDeadlineMs > 0) { val left = (state.sleepDeadlineMs - now).coerceAtLeast(0); AssistChip(onClick = { showTimer = true }, label = { Text("${formatTime(left)} 后停止") }) }
+            TextButton(onClick = { onCommand(PlaybackContract.ACTION_RESTART, null) }) {
+                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("重播当前段", fontWeight = FontWeight.Bold)
+            }
+            if (state.sleepDeadlineMs > 0) {
+                val left = (state.sleepDeadlineMs - now).coerceAtLeast(0)
+                AssistChip(onClick = { showTimer = true }, label = { Text("${formatTime(left)} 后停止") }, colors = AssistChipDefaults.assistChipColors(containerColor = YellowLight))
+            }
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
@@ -234,97 +360,63 @@ private fun PlayerScreen(
 }
 
 @Composable
-private fun SubtitlePanel(
-    state: com.echoenglish.app.playback.PlaybackSnapshot,
-    modifier: Modifier,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    onSubtitleClick: (Long) -> Unit
-) {
+private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit) {
     val listState = rememberLazyListState()
     var userBrowsing by remember { mutableStateOf(false) }
     var autoScrolling by remember { mutableStateOf(false) }
-
     LaunchedEffect(listState, expanded) {
         if (!expanded) return@LaunchedEffect
         snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
-            if (scrolling && !autoScrolling) {
-                userBrowsing = true
-            } else if (!scrolling && userBrowsing) {
-                delay(2500)
-                userBrowsing = false
-            }
+            if (scrolling && !autoScrolling) userBrowsing = true
+            else if (!scrolling && userBrowsing) { delay(2500); userBrowsing = false }
         }
     }
     LaunchedEffect(state.subtitleIndex, expanded, userBrowsing) {
         if (expanded && !userBrowsing && state.subtitleIndex in state.subtitles.indices) {
-            delay(40)
-            autoScrolling = true
+            delay(40); autoScrolling = true
             try {
-                val viewportHeight = listState.layoutInfo.viewportSize.height
-                val itemHeight = listState.layoutInfo.visibleItemsInfo
-                    .firstOrNull { it.index == state.subtitleIndex }?.size ?: 84
-                val centerOffset = -((viewportHeight - itemHeight) / 2).coerceAtLeast(0)
-                listState.animateScrollToItem(state.subtitleIndex, centerOffset)
-            } finally {
-                autoScrolling = false
-            }
+                val viewport = listState.layoutInfo.viewportSize.height
+                val itemHeight = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == state.subtitleIndex }?.size ?: 84
+                listState.animateScrollToItem(state.subtitleIndex, -((viewport - itemHeight) / 2).coerceAtLeast(0))
+            } finally { autoScrolling = false }
         }
     }
-
-    Surface(modifier = modifier, shape = RoundedCornerShape(18.dp), color = Color.White) {
+    Surface(modifier = modifier, shape = CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)) {
         Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = MutedInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 if (state.subtitles.isNotEmpty()) {
                     TextButton(onClick = { onExpandedChange(!expanded) }) {
-                        Text(if (expanded) "收起字幕 ︿" else "展开字幕 ﹀", color = Purple, fontSize = 13.sp)
+                        Text(if (expanded) "收起" else "展开字幕", color = Purple, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Icon(if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = Purple)
                     }
                 }
             }
             if (state.subtitles.isEmpty()) {
                 Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
-                    Text(state.subtitle.ifBlank { "当前音频暂无字幕" }, color = Ink, fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.Bold)
+                    Text(state.subtitle.ifBlank { "当前音频暂无字幕" }, color = Ink, fontSize = 19.sp, lineHeight = 27.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 }
             } else if (!expanded) {
                 val cue = state.subtitles.getOrNull(state.subtitleIndex)
-                Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        cue?.text ?: "字幕即将开始…",
-                        color = Ink,
-                        fontSize = 20.sp,
-                        lineHeight = 29.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp, vertical = 5.dp), contentAlignment = Alignment.Center) {
+                    Text(cue?.text ?: "字幕即将开始…", color = Ink, fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 if (userBrowsing) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { userBrowsing = false }) { Text("回到当前字幕", color = Purple, fontSize = 12.sp) }
+                        TextButton(onClick = { userBrowsing = false }) { Text("回到当前字幕", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                     }
                 }
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    state = listState,
-                    contentPadding = PaddingValues(vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     itemsIndexed(state.subtitles) { index, cue ->
                         val selected = index == state.subtitleIndex
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 10.dp)
-                                .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(12.dp))
-                                .border(if (selected) 1.5.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(12.dp))
-                                .clickable { onSubtitleClick(cue.startMs) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                                .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(14.dp))
+                                .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(14.dp))
+                                .clickable { onSubtitleClick(cue.startMs) }.padding(horizontal = 14.dp, vertical = 10.dp)
                         ) {
-                            Text(formatTime(cue.startMs), color = if (selected) Purple else Color.Gray, fontSize = 11.sp)
+                            Text(formatTime(cue.startMs), color = if (selected) Purple else MutedInk, fontSize = 11.sp)
                             Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                         }
                     }
@@ -333,81 +425,187 @@ private fun SubtitlePanel(
         }
     }
 }
+
 @Composable
-private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText: String, rightText: String, enabled: Boolean, onValueChange: (Float) -> Unit, onFinished: () -> Unit) {
+private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText: String, rightText: String, enabled: Boolean, accent: Color, onValueChange: (Float) -> Unit, onFinished: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label, color = Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text("$leftText / $rightText", color = Color.Gray, fontSize = 12.sp) }
-        Slider(value = value.coerceIn(0f, maximum.coerceAtLeast(1f)), onValueChange = onValueChange, onValueChangeFinished = onFinished, valueRange = 0f..maximum.coerceAtLeast(1f), enabled = enabled, modifier = Modifier.height(30.dp), colors = SliderDefaults.colors(thumbColor = Purple, activeTrackColor = Purple))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text("$leftText / $rightText", color = MutedInk, fontSize = 12.sp)
+        }
+        Slider(value = value.coerceIn(0f, maximum.coerceAtLeast(1f)), onValueChange = onValueChange, onValueChangeFinished = onFinished, valueRange = 0f..maximum.coerceAtLeast(1f), enabled = enabled, modifier = Modifier.height(27.dp), colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent, inactiveTrackColor = accent.copy(alpha = .18f)))
     }
 }
 
 @Composable
-private fun SegmentPickerDialog(state: com.echoenglish.app.playback.PlaybackSnapshot, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
+private fun SegmentPickerDialog(state: PlaybackSnapshot, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
     val initial = state.segmentIndex.coerceIn(0, (state.segments.size - 1).coerceAtLeast(0))
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("跳转到指定片段") }, text = {
-        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            itemsIndexed(state.segments) { index, segment ->
-                val selected = index == state.segmentIndex
-                Column(Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF5F5F5), RoundedCornerShape(10.dp)).border(if (selected) 1.5.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(10.dp)).clickable { onSelect(index) }.padding(12.dp)) {
-                    Text("第 ${index + 1} 段  ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
-                    if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.DarkGray, fontSize = 13.sp)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = CardShape,
+        title = { Text("跳转到指定片段", fontWeight = FontWeight.Black) },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                itemsIndexed(state.segments) { index, segment ->
+                    val selected = index == state.segmentIndex
+                    Column(
+                        Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
+                            .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
+                            .clickable { onSelect(index) }.padding(12.dp)
+                    ) {
+                        Text("第 ${index + 1} 段 · ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
+                        if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+                    }
                 }
             }
-        }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
 }
 
 @Composable
 private fun SleepTimerDialog(onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("睡眠定时器") }, text = { Column { listOf(5, 10, 15, 30, 45, 60, 90).chunked(3).forEach { row -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { value -> OutlinedButton(onClick = { onSelect(value) }) { Text("${value}分") } } } } } }, confirmButton = { TextButton(onClick = { onSelect(0) }) { Text("关闭定时") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = CardShape,
+        title = { Text("睡眠定时器", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(5, 10, 15, 30, 45, 60, 90).chunked(3).forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.forEach { value -> OutlinedButton(onClick = { onSelect(value) }, modifier = Modifier.weight(1f), shape = ControlShape) { Text("${value}分") } }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSelect(0) }) { Text("关闭定时") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 @Composable
 private fun SettingsScreen(value: PlaybackSettings, onChange: (PlaybackSettings) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp), contentPadding = PaddingValues(top = 20.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item { Text("学习设置", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Ink) }
-        item { SettingCard("分段方式") { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
-        item { val enabled = value.segmentMode == SegmentMode.FIXED; SettingCard("每段时长", enabled, if (!enabled) "按字幕分段时，片段长度由字幕时间轴决定" else null) { ChoiceGrid(listOf("5秒" to 5, "10秒" to 10, "15秒" to 15, "20秒" to 20, "30秒" to 30), value.segmentSeconds, enabled) { onChange(value.copy(segmentSeconds = it)) } } }
-        item { SettingCard("每段重复") { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
-        item { SettingCard("播放速度") { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
-        item { SettingCard("列表播放") { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
-        item { SettingCard("定时到点") { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
-        item { Text("设置会自动保存，并立即应用到当前正在播放的音频。", color = Color.Gray, fontSize = 13.sp) }
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("学习设置", fontSize = 29.sp, fontWeight = FontWeight.Black, color = Ink)
+            Text("每次调整都会立即应用到当前音频", color = MutedInk, fontSize = 14.sp)
+        }
+        item { SettingCard("分段方式", Icons.Rounded.List, Purple, PurpleLight) { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
+        item {
+            val enabled = value.segmentMode == SegmentMode.FIXED
+            SettingCard("每段时长", Icons.Rounded.DateRange, Coral, CoralLight, enabled, if (!enabled) "按字幕分段时，片段长度由字幕时间轴决定" else null) {
+                ChoiceGrid(listOf("5秒" to 5, "10秒" to 10, "15秒" to 15, "20秒" to 20, "30秒" to 30), value.segmentSeconds, enabled) { onChange(value.copy(segmentSeconds = it)) }
+            }
+        }
+        item { SettingCard("每段重复", Icons.Rounded.Refresh, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
+        item { SettingCard("播放速度", Icons.Rounded.PlayArrow, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
+        item { SettingCard("列表播放", Icons.Rounded.List, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
+        item { SettingCard("定时到点", Icons.Rounded.DateRange, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
     }
 }
 
 @Composable
-private fun SettingCard(title: String, enabled: Boolean = true, hint: String? = null, content: @Composable () -> Unit) {
-    Column(Modifier.alpha(if (enabled) 1f else .48f)) { Text(title, fontWeight = FontWeight.Bold, color = Ink); hint?.let { Text(it, color = Color.Gray, fontSize = 12.sp) }; Spacer(Modifier.height(7.dp)); content() }
+private fun SettingCard(title: String, icon: ImageVector, accent: Color, background: Color, enabled: Boolean = true, hint: String? = null, content: @Composable () -> Unit) {
+    Surface(modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else .5f), shape = CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(12.dp), color = background, modifier = Modifier.size(38.dp)) { Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp)) } }
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(title, fontWeight = FontWeight.Black, color = Ink)
+                    hint?.let { Text(it, color = MutedInk, fontSize = 12.sp, lineHeight = 16.sp) }
+                }
+            }
+            Spacer(Modifier.height(11.dp))
+            content()
+        }
+    }
 }
 
 @Composable
 private fun <T> ChoiceGrid(options: List<Pair<String, T>>, selectedValue: T, enabled: Boolean = true, onSelect: (T) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         options.chunked(3).forEach { rowOptions ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 rowOptions.forEach { (label, option) ->
                     val selected = SelectionLogic.isSelected(selectedValue, option)
-                    val shape = RoundedCornerShape(10.dp)
-                    Box(
-                        modifier = Modifier.weight(1f).heightIn(min = 42.dp)
-                            .background(if (selected) PurpleLight else Color.White, shape)
-                            .border(if (selected) 1.5.dp else 0.8.dp, if (selected) Purple else Color.LightGray, shape)
-                            .clickable(enabled = enabled) { onSelect(option) }
-                            .padding(horizontal = 8.dp, vertical = 9.dp),
-                        contentAlignment = Alignment.Center
+                    Surface(
+                        modifier = Modifier.weight(1f).heightIn(min = 43.dp).clickable(enabled = enabled) { onSelect(option) },
+                        shape = RoundedCornerShape(13.dp),
+                        color = if (selected) PurpleLight else Color(0xFFFBFAF9),
+                        border = androidx.compose.foundation.BorderStroke(if (selected) 1.5.dp else 1.dp, if (selected) Purple else SoftBorder)
                     ) {
-                        Text(
-                            label,
-                            color = if (selected) Purple else Ink,
-                            fontSize = 13.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                        )
+                        Box(Modifier.padding(horizontal = 7.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
+                            Text(label, color = if (selected) Purple else Ink, fontSize = 13.sp, textAlign = TextAlign.Center, fontWeight = if (selected) FontWeight.Black else FontWeight.Medium)
+                        }
                     }
                 }
                 repeat(3 - rowOptions.size) { Spacer(Modifier.weight(1f)) }
             }
         }
+    }
+}
+
+@Composable
+private fun InfoPill(text: String, background: Color, foreground: Color) {
+    Surface(shape = CircleShape, color = background) { Text(text, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = foreground, fontSize = 12.sp, fontWeight = FontWeight.Black) }
+}
+
+@Composable
+private fun PauseSymbol(size: Dp, color: Color) {
+    Canvas(Modifier.size(size)) {
+        val bar = size.toPx() * .22f
+        val gap = size.toPx() * .14f
+        val left = (this.size.width - bar * 2 - gap) / 2f
+        drawRoundRect(color, Offset(left, size.toPx() * .2f), androidx.compose.ui.geometry.Size(bar, size.toPx() * .6f), androidx.compose.ui.geometry.CornerRadius(bar / 3f))
+        drawRoundRect(color, Offset(left + bar + gap, size.toPx() * .2f), androidx.compose.ui.geometry.Size(bar, size.toPx() * .6f), androidx.compose.ui.geometry.CornerRadius(bar / 3f))
+    }
+}
+
+@Composable
+private fun MusicSymbol(size: Dp, color: Color) {
+    Canvas(Modifier.size(size)) {
+        val s = this.size.minDimension / 24f
+        val stroke = Stroke(2.1f * s, cap = StrokeCap.Round)
+        drawLine(color, Offset(10f*s, 5f*s), Offset(19f*s, 3f*s), strokeWidth = 2.1f*s, cap = StrokeCap.Round)
+        drawLine(color, Offset(10f*s, 5f*s), Offset(10f*s, 16f*s), strokeWidth = 2.1f*s, cap = StrokeCap.Round)
+        drawLine(color, Offset(19f*s, 3f*s), Offset(19f*s, 14f*s), strokeWidth = 2.1f*s, cap = StrokeCap.Round)
+        drawLine(color, Offset(10f*s, 9f*s), Offset(19f*s, 7f*s), strokeWidth = 2.1f*s, cap = StrokeCap.Round)
+        drawCircle(color, 3.2f*s, Offset(7f*s, 17f*s), style = stroke)
+        drawCircle(color, 3.2f*s, Offset(16f*s, 15f*s), style = stroke)
+    }
+}
+
+@Composable
+private fun UploadSymbol(size: Dp, color: Color) {
+    Canvas(Modifier.size(size)) {
+        val s = this.size.minDimension / 24f
+        val w = 2.1f*s
+        drawLine(color, Offset(12f*s, 16f*s), Offset(12f*s, 5f*s), w, StrokeCap.Round)
+        drawLine(color, Offset(12f*s, 5f*s), Offset(8f*s, 9f*s), w, StrokeCap.Round)
+        drawLine(color, Offset(12f*s, 5f*s), Offset(16f*s, 9f*s), w, StrokeCap.Round)
+        drawLine(color, Offset(5f*s, 19f*s), Offset(19f*s, 19f*s), w, StrokeCap.Round)
+    }
+}
+
+@Composable
+private fun FolderSymbol(size: Dp, color: Color) {
+    Canvas(Modifier.size(size)) {
+        val s = this.size.minDimension / 24f
+        val path = androidx.compose.ui.graphics.Path().apply { moveTo(3f*s, 7f*s); lineTo(9f*s, 7f*s); lineTo(11f*s, 9f*s); lineTo(21f*s, 9f*s); lineTo(20f*s, 19f*s); lineTo(4f*s, 19f*s); close() }
+        drawPath(path, color, style = Stroke(2.1f*s, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+    }
+}
+
+@Composable
+private fun HeadphonesSymbol(size: Dp, color: Color) {
+    Canvas(Modifier.size(size)) {
+        val s = this.size.minDimension / 24f
+        val stroke = Stroke(2.2f*s, cap = StrokeCap.Round)
+        drawArc(color, 200f, 140f, false, Offset(4f*s, 3f*s), androidx.compose.ui.geometry.Size(16f*s, 16f*s), style = stroke)
+        drawRoundRect(color, Offset(3f*s, 12f*s), androidx.compose.ui.geometry.Size(5f*s, 8f*s), androidx.compose.ui.geometry.CornerRadius(2f*s), style = stroke)
+        drawRoundRect(color, Offset(16f*s, 12f*s), androidx.compose.ui.geometry.Size(5f*s, 8f*s), androidx.compose.ui.geometry.CornerRadius(2f*s), style = stroke)
     }
 }
