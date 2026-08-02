@@ -6,6 +6,12 @@ import kotlinx.coroutines.flow.asStateFlow
 data class SegmentSnapshot(val startMs: Long, val endMs: Long, val text: String = "")
 data class SubtitleSnapshot(val startMs: Long, val endMs: Long, val text: String)
 
+enum class PlaybackStopReason {
+    NONE,
+    TRACK_COMPLETED,
+    SLEEP_TIMER
+}
+
 data class PlaybackSnapshot(
     val title: String = "",
     val isPlaying: Boolean = false,
@@ -28,6 +34,7 @@ data class PlaybackSnapshot(
     val isSegmentGapPaused: Boolean = false,
     val segmentGapRemainingMs: Long = 0,
     val completed: Boolean = false,
+    val stopReason: PlaybackStopReason = PlaybackStopReason.NONE,
     val errorMessage: String = ""
 ) {
     val segmentPositionMs: Long get() = (positionMs - segmentStartMs).coerceAtLeast(0)

@@ -1,8 +1,10 @@
 package com.echoenglish.app.ui
 
 import android.app.Application
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -20,6 +22,7 @@ import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackService
 import com.echoenglish.app.playback.PlaybackServicePolicy
+import com.echoenglish.app.playback.PlaybackStopReason
 import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
@@ -51,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentSegments: List<Segment> = emptyList()
     private val subtitleOffsetWriteMutex = Mutex()
     private var completionHandled = false
+    private var sleepTimerStopHandled = false
     private var lastPlaybackError = ""
 
     init {
@@ -63,11 +67,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else if (state.errorMessage.isBlank()) {
                     lastPlaybackError = ""
                 }
-                if (state.completed && !completionHandled) {
+                if (state.stopReason == PlaybackStopReason.SLEEP_TIMER) {
+                    if (!sleepTimerStopHandled) {
+                        sleepTimerStopHandled = true
+                        completionHandled = false
+                        persistProgress(false)
+                        mutableMessage.value = "\u5b9a\u65f6\u7ed3\u675f\uff0c\u5df2\u5728\u5f53\u524d\u6bb5\u7ed3\u675f\u540e\u505c\u6b62"
+                    }
+                } else if (
+                    PlaybackServicePolicy.shouldAdvancePlaylist(state.completed, state.stopReason) &&
+                    !completionHandled
+                ) {
+                    sleepTimerStopHandled = false
                     completionHandled = true
                     persistProgress(true)
                     advancePlaylist()
-                } else if (!state.completed) completionHandled = false
+                } else if (!state.completed) {
+                    sleepTimerStopHandled = false
+                    completionHandled = false
+                }
             }
         }
         viewModelScope.launch {
@@ -90,10 +108,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun sendService(intent: Intent) {
-        if (PlaybackServicePolicy.requiresForegroundStart(intent.action)) {
-            ContextCompat.startForegroundService(app, intent)
-        } else {
-            app.startService(intent)
+        if (PlaybackService.dispatchToActiveService(intent)) {
+            Log.d("EchoPlayback", "command sent to active service: " + intent.action)
+            return
+        }
+        try {
+            if (PlaybackServicePolicy.requiresForegroundStart(intent.action)) {
+                ContextCompat.startForegroundService(app, intent)
+            } else {
+                app.startService(intent)
+            }
+        } catch (error: RuntimeException) {
+            val backgroundStartBlocked =
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    error is ForegroundServiceStartNotAllowedException
+            if (!backgroundStartBlocked) throw error
+
+            Log.e(
+                "EchoPlayback",
+                "foreground service start blocked while app is backgrounded; action=" + intent.action,
+                error
+            )
+            mutableMessage.value = "\u7cfb\u7edf\u6682\u4e0d\u5141\u8bb8\u4ece\u540e\u53f0\u542f\u52a8\u64ad\u653e\uff0c\u8bf7\u56de\u5230\u5e94\u7528\u540e\u91cd\u8bd5"
         }
     }
 

@@ -13,6 +13,39 @@ class PlaybackServicePolicyTest {
         assertFalse(PlaybackServicePolicy.requiresForegroundStart(PlaybackContract.ACTION_UPDATE_SPEED))
     }
 
+    @Test fun naturalCompletionMayAdvancePlaylist() {
+        assertTrue(
+            PlaybackServicePolicy.shouldAdvancePlaylist(
+                completed = true,
+                stopReason = PlaybackStopReason.TRACK_COMPLETED
+            )
+        )
+    }
+
+    @Test fun sleepTimerStopNeverAdvancesPlaylist() {
+        assertFalse(
+            PlaybackServicePolicy.shouldAdvancePlaylist(
+                completed = true,
+                stopReason = PlaybackStopReason.SLEEP_TIMER
+            )
+        )
+        assertFalse(
+            PlaybackServicePolicy.shouldAdvancePlaylist(
+                completed = false,
+                stopReason = PlaybackStopReason.SLEEP_TIMER
+            )
+        )
+    }
+
+    @Test fun incompletePlaybackNeverAdvancesPlaylist() {
+        assertFalse(
+            PlaybackServicePolicy.shouldAdvancePlaylist(
+                completed = false,
+                stopReason = PlaybackStopReason.TRACK_COMPLETED
+            )
+        )
+    }
+
     @Test fun playingServiceSurvivesTaskRemoval() {
         assertTrue(PlaybackServicePolicy.shouldKeepOnTaskRemoved(isPlaying = true, mediaItemCount = 1))
     }

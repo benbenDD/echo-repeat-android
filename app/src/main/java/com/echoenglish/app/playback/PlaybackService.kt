@@ -72,6 +72,7 @@ class PlaybackService : MediaSessionService() {
     private var stopAtSegmentEnd = true
     private var pendingSleepStop = false
     private var completed = false
+    private var stopReason = PlaybackStopReason.NONE
     private var playbackError = ""
     private var playbackTaskActive = false
 
@@ -210,6 +211,8 @@ class PlaybackService : MediaSessionService() {
         sleepDeadline = prefs.getLong("deadline", 0L).takeIf { it > System.currentTimeMillis() } ?: 0L
         stopAtSegmentEnd = prefs.getBoolean("stop_at_end", true)
         handler.post(ticker)
+        activeInstance = this
+        Log.i(TAG, "active service command dispatcher registered")
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession {
@@ -238,7 +241,13 @@ class PlaybackService : MediaSessionService() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action ?: "null"} startId=$startId")
-        when (intent?.action) {
+        intent?.let(::handleCommand)
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun handleCommand(intent: Intent) {
+        Log.i(TAG, "handleCommand action=${intent.action ?: "null"}")
+        when (intent.action) {
             PlaybackContract.ACTION_LOAD -> load(intent)
             PlaybackContract.ACTION_TOGGLE -> togglePlayback()
             PlaybackContract.ACTION_NEXT -> nextSegment()
@@ -254,7 +263,6 @@ class PlaybackService : MediaSessionService() {
             PlaybackContract.ACTION_TIMER -> setTimer(intent)
             PlaybackContract.ACTION_CANCEL_TIMER -> clearTimer()
         }
-        return super.onStartCommand(intent, flags, startId)
     }
 
     private inner class SegmentControlPlayer(delegate: Player) : ForwardingPlayer(delegate) {
@@ -371,6 +379,7 @@ class PlaybackService : MediaSessionService() {
         sourceMediaId = intent.getStringExtra(PlaybackContract.EXTRA_MEDIA_ID) ?: uri.toString()
         completed = false
         pendingSleepStop = false
+        stopReason = PlaybackStopReason.NONE
         val requestedStartPosition = if (resolvedPosition >= 0) {
             resolvedPosition
         } else {
@@ -721,7 +730,10 @@ class PlaybackService : MediaSessionService() {
         cancelAutomatedWork(clearGap = true)
         player.pause()
         pendingSleepStop = false
-        clearTimer()
+        completed = false
+        stopReason = PlaybackStopReason.SLEEP_TIMER
+        Log.i(TAG, "sleep timer stopped playback without completing track")
+        clearTimer(preserveStopReason = true)
     }
 
     private fun cancelBoundary() {
@@ -817,10 +829,7 @@ class PlaybackService : MediaSessionService() {
                 "expectedEnd=${token.endMs} actual=$actual lateness=${actual - token.endMs}"
         )
         if (pendingSleepStop) {
-            player.pause()
-            pendingSleepStop = false
-            clearTimer()
-            publish()
+            stopForSleepTimer()
             return
         }
 
@@ -859,9 +868,7 @@ class PlaybackService : MediaSessionService() {
                 "segment=$segmentIndex repeat=$repeatIndex absolute=${absolutePositionMs()}"
         )
         if (pendingSleepStop) {
-            pendingSleepStop = false
-            clearTimer()
-            completeTrack()
+            stopForSleepTimer()
             return
         }
 
@@ -964,6 +971,7 @@ class PlaybackService : MediaSessionService() {
         playbackTaskActive = false
         cancelAutomatedWork(clearGap = true)
         completed = true
+        stopReason = PlaybackStopReason.TRACK_COMPLETED
         player.pause()
         publish()
     }
@@ -1033,9 +1041,11 @@ class PlaybackService : MediaSessionService() {
         } else if (completed || player.playbackState == Player.STATE_ENDED) {
             repeatIndex = 1
             completed = false
+            stopReason = PlaybackStopReason.NONE
             startPlaybackAt(starts.getOrElse(segmentIndex) { 0L }, shouldPlay = true)
         } else {
             playbackTaskActive = true
+            stopReason = PlaybackStopReason.NONE
             player.play()
             armBoundary()
         }
@@ -1044,6 +1054,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun handlePlayRequest() {
         playbackTaskActive = true
+        stopReason = PlaybackStopReason.NONE
         if (isInSegmentGap) {
             if (isSegmentGapPaused) resumeGap()
         } else if (completed || player.playbackState == Player.STATE_ENDED) {
@@ -1176,6 +1187,7 @@ class PlaybackService : MediaSessionService() {
         val minutes = intent.getIntExtra(PlaybackContract.EXTRA_TIMER_MINUTES, 0)
         stopAtSegmentEnd = intent.getBooleanExtra(PlaybackContract.EXTRA_STOP_AT_END, true)
         pendingSleepStop = false
+        stopReason = PlaybackStopReason.NONE
         sleepDeadline = if (minutes > 0) {
             System.currentTimeMillis() + minutes * 60_000L
         } else {
@@ -1188,8 +1200,9 @@ class PlaybackService : MediaSessionService() {
         publish()
     }
 
-    private fun clearTimer() {
+    private fun clearTimer(preserveStopReason: Boolean = false) {
         sleepDeadline = 0
+        if (!preserveStopReason) stopReason = PlaybackStopReason.NONE
         getSharedPreferences("sleep_timer", MODE_PRIVATE).edit().clear().apply()
         publish()
     }
@@ -1239,6 +1252,7 @@ class PlaybackService : MediaSessionService() {
                 isSegmentGapPaused = isSegmentGapPaused,
                 segmentGapRemainingMs = segmentGapRemainingMs,
                 completed = completed,
+                stopReason = stopReason,
                 errorMessage = playbackError
             )
         )
@@ -1246,6 +1260,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun phaseName(): String = when {
         completed -> "COMPLETED"
+        stopReason == PlaybackStopReason.SLEEP_TIMER -> "SLEEP_TIMER_STOPPED"
         isInSegmentGap && isSegmentGapPaused -> "GAP_PAUSED"
         isInSegmentGap -> "WAITING_GAP"
         player.isPlaying -> "PLAYING_SEGMENT"
@@ -1272,6 +1287,10 @@ class PlaybackService : MediaSessionService() {
                 "state=${player.playbackState} gapWakeHeld=${gapWakeLock.isHeld}"
         )
         handler.removeCallbacksAndMessages(null)
+        if (activeInstance === this) {
+            activeInstance = null
+            Log.i(TAG, "active service command dispatcher cleared")
+        }
         cancelBoundary()
         releaseGapWakeLock()
         session.release()
@@ -1281,6 +1300,19 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         private const val TAG = "EchoPlayback"
+        @Volatile
+        private var activeInstance: PlaybackService? = null
+
+        fun dispatchToActiveService(intent: Intent): Boolean {
+            val service = activeInstance ?: return false
+            val command = Intent(intent)
+            service.handler.post {
+                if (activeInstance === service) {
+                    service.handleCommand(command)
+                }
+            }
+            return true
+        }
         private const val TICK_MS = 80L
         private const val ADJACENT_TOLERANCE_MS = 2L
         private const val MAX_GAP_WAKE_LOCK_MS = 10_000L
