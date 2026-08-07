@@ -71,5 +71,23 @@ object SegmentPlaybackPolicy {
         repeatCount: Int
     ): Long = if (repeatCount == 1) requestedPositionMs else segmentStartMs
 
+    fun initialPosition(
+        requestedPositionMs: Long,
+        segmentStartMs: Long,
+        repeatCount: Int,
+        restoreExactPosition: Boolean
+    ): Long = if (restoreExactPosition) {
+        requestedPositionMs
+    } else {
+        alignedInitialPosition(requestedPositionMs, segmentStartMs, repeatCount)
+    }
+
+    fun normalizedRepeatIndex(repeatCount: Int, requestedRepeatIndex: Int): Int =
+        if (repeatCount <= 0) {
+            requestedRepeatIndex.coerceAtLeast(1)
+        } else {
+            requestedRepeatIndex.coerceIn(1, repeatCount)
+        }
+
     fun normalizedGapMs(value: Long): Long = value.coerceIn(0L, 5_000L)
 }

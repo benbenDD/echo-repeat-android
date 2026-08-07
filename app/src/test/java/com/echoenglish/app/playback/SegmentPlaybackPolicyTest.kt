@@ -121,6 +121,41 @@ class SegmentPlaybackPolicyTest {
         )
     }
 
+    @Test fun coldRestoreKeepsExactPositionEvenWhenSegmentRepeats() {
+        assertEquals(
+            12_345L,
+            SegmentPlaybackPolicy.initialPosition(
+                requestedPositionMs = 12_345L,
+                segmentStartMs = 10_000L,
+                repeatCount = 5,
+                restoreExactPosition = true
+            )
+        )
+    }
+
+    @Test fun manualLoadStillAlignsRepeatedSegmentToItsStart() {
+        assertEquals(
+            10_000L,
+            SegmentPlaybackPolicy.initialPosition(
+                requestedPositionMs = 12_345L,
+                segmentStartMs = 10_000L,
+                repeatCount = 5,
+                restoreExactPosition = false
+            )
+        )
+    }
+
+    @Test fun finiteRepeatIndexIsClampedToConfiguredCount() {
+        assertEquals(1, SegmentPlaybackPolicy.normalizedRepeatIndex(5, 0))
+        assertEquals(4, SegmentPlaybackPolicy.normalizedRepeatIndex(5, 4))
+        assertEquals(5, SegmentPlaybackPolicy.normalizedRepeatIndex(5, 8))
+    }
+
+    @Test fun infiniteRepeatIndexKeepsAnyPositiveIteration() {
+        assertEquals(1, SegmentPlaybackPolicy.normalizedRepeatIndex(0, 0))
+        assertEquals(27, SegmentPlaybackPolicy.normalizedRepeatIndex(0, 27))
+    }
+
     @Test fun configuredGapOnlyAppliesBetweenRepeatsOfSameSegment() {
         assertTrue(
             SegmentPlaybackPolicy.shouldInsertGap(
