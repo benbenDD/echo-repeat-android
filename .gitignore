@@ -1,4 +1,5 @@
 .gradle/
+.worktrees/
 .idea/
 local.properties
 **/build/
