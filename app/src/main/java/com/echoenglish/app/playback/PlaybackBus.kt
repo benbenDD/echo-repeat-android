@@ -13,6 +13,7 @@ enum class PlaybackStopReason {
 }
 
 data class PlaybackSnapshot(
+    val mediaId: String = "",
     val title: String = "",
     val isPlaying: Boolean = false,
     val positionMs: Long = 0,

@@ -26,9 +26,17 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.echoenglish.app.EchoEnglishApp
 import com.echoenglish.app.MainActivity
 import com.echoenglish.app.model.Segment
 import com.echoenglish.app.util.Segmenter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -36,6 +44,12 @@ class PlaybackService : MediaSessionService() {
     private lateinit var sessionPlayer: Player
     private lateinit var session: MediaSession
     private val handler = Handler(Looper.getMainLooper())
+    private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val persistenceMutex = Mutex()
+    private lateinit var app: EchoEnglishApp
+    private lateinit var playbackSessionStore: PlaybackSessionStore
+    private var lastSessionSavedAtMs = 0L
+    private var lastDatabaseSavedAtMs = 0L
 
     private var starts = longArrayOf()
     private var ends = longArrayOf()
@@ -103,6 +117,8 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "PlaybackService created")
+        app = application as EchoEnglishApp
+        playbackSessionStore = app.playbackSessionStore
         gapWakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:segment-gap")
             .apply { setReferenceCounted(false) }
@@ -374,7 +390,10 @@ class PlaybackService : MediaSessionService() {
             intent.getIntExtra(PlaybackContract.EXTRA_INDEX, 0)
                 .coerceIn(0, starts.lastIndex)
         }
-        repeatIndex = 1
+        repeatIndex = SegmentPlaybackPolicy.normalizedRepeatIndex(
+            repeatCount,
+            intent.getIntExtra(PlaybackContract.EXTRA_REPEAT_INDEX, 1)
+        )
         currentTitle = intent.getStringExtra(PlaybackContract.EXTRA_TITLE).orEmpty()
         sourceMediaId = intent.getStringExtra(PlaybackContract.EXTRA_MEDIA_ID) ?: uri.toString()
         completed = false
@@ -385,13 +404,20 @@ class PlaybackService : MediaSessionService() {
         } else {
             starts[segmentIndex]
         }
-        val startPosition = SegmentPlaybackPolicy.alignedInitialPosition(
+        val startPosition = SegmentPlaybackPolicy.initialPosition(
             requestedPositionMs = requestedStartPosition,
             segmentStartMs = starts[segmentIndex],
-            repeatCount = repeatCount
+            repeatCount = repeatCount,
+            restoreExactPosition = intent.getBooleanExtra(
+                PlaybackContract.EXTRA_RESTORE_EXACT_POSITION,
+                false
+            )
         )
         player.setPlaybackSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
-        startPlaybackAt(startPosition, shouldPlay = true)
+        startPlaybackAt(
+            startPosition,
+            shouldPlay = intent.getBooleanExtra(PlaybackContract.EXTRA_AUTO_PLAY, true)
+        )
         publish()
     }
 
@@ -711,6 +737,7 @@ class PlaybackService : MediaSessionService() {
             }
         }
         publish()
+        persistPlaybackSession()
     }
 
     private fun handleSleepTimer() {
@@ -974,6 +1001,7 @@ class PlaybackService : MediaSessionService() {
         stopReason = PlaybackStopReason.TRACK_COMPLETED
         player.pause()
         publish()
+        persistPlaybackSession(force = true)
     }
     private fun previousSegment() {
         if (starts.isEmpty()) return
@@ -1050,6 +1078,7 @@ class PlaybackService : MediaSessionService() {
             armBoundary()
         }
         publish()
+        if (!effectiveIsPlaying()) persistPlaybackSession(force = true)
     }
 
     private fun handlePlayRequest() {
@@ -1072,6 +1101,7 @@ class PlaybackService : MediaSessionService() {
         playbackTaskActive = false
         if (isInSegmentGap) pauseGap() else player.pause()
         publish()
+        persistPlaybackSession(force = true)
     }
 
     private fun pauseGap() {
@@ -1231,6 +1261,7 @@ class PlaybackService : MediaSessionService() {
         }
         PlaybackBus.update(
             PlaybackSnapshot(
+                mediaId = sourceMediaId,
                 title = currentTitle,
                 isPlaying = effectiveIsPlaying(),
                 positionMs = position,
@@ -1258,6 +1289,41 @@ class PlaybackService : MediaSessionService() {
         )
     }
 
+    private fun persistPlaybackSession(
+        force: Boolean = false,
+        persistDatabase: Boolean = true
+    ) {
+        val trackId = sourceMediaId.toLongOrNull()?.takeIf { it > 0L } ?: return
+        if (starts.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (!force && !PlaybackSessionPolicy.isSaveDue(now, lastSessionSavedAtMs)) return
+        val value = PersistedPlaybackSession(
+            trackId = trackId,
+            positionMs = absolutePositionMs(),
+            segmentIndex = segmentIndex,
+            repeatIndex = repeatIndex,
+            wasPlaying = effectiveIsPlaying(),
+            savedAtMs = now
+        )
+        val wasCompleted = completed
+        playbackSessionStore.save(value, synchronous = force)
+        lastSessionSavedAtMs = now
+        if (!persistDatabase) return
+        persistenceScope.launch {
+            persistenceMutex.withLock {
+                if (value.savedAtMs < lastDatabaseSavedAtMs) return@withLock
+                app.database.trackDao.updateProgress(
+                    value.trackId,
+                    value.positionMs,
+                    value.segmentIndex,
+                    value.savedAtMs,
+                    wasCompleted
+                )
+                lastDatabaseSavedAtMs = value.savedAtMs
+            }
+        }
+    }
+
     private fun phaseName(): String = when {
         completed -> "COMPLETED"
         stopReason == PlaybackStopReason.SLEEP_TIMER -> "SLEEP_TIMER_STOPPED"
@@ -1269,6 +1335,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        persistPlaybackSession(force = true)
         val keepService = PlaybackServicePolicy.shouldKeepOnTaskRemoved(
             effectiveIsPlaying(),
             player.mediaItemCount
@@ -1286,6 +1353,7 @@ class PlaybackService : MediaSessionService() {
             "PlaybackService destroyed effectivePlaying=${effectiveIsPlaying()} " +
                 "state=${player.playbackState} gapWakeHeld=${gapWakeLock.isHeld}"
         )
+        persistPlaybackSession(force = true, persistDatabase = false)
         handler.removeCallbacksAndMessages(null)
         if (activeInstance === this) {
             activeInstance = null
@@ -1295,6 +1363,7 @@ class PlaybackService : MediaSessionService() {
         releaseGapWakeLock()
         session.release()
         player.release()
+        persistenceScope.cancel()
         super.onDestroy()
     }
 
