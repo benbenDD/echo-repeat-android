@@ -127,6 +127,7 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
     val playback by vm.playback.collectAsState()
     val settings by vm.settings.collectAsState()
     val message by vm.message.collectAsState()
+    val startupRestoredTrackId by vm.startupRestoredTrackId.collectAsState()
     val openPlayerRequest by openPlayerRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
     val snackbar = remember { SnackbarHostState() }
@@ -143,6 +144,9 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
     }
     LaunchedEffect(openPlayerRequest) {
         if (openPlayerRequest > 0) screen = Screen.PLAYER
+    }
+    LaunchedEffect(startupRestoredTrackId) {
+        if (startupRestoredTrackId > 0L) screen = Screen.PLAYER
     }
 
     Scaffold(

@@ -20,6 +20,9 @@ import com.echoenglish.app.model.SrtCue
 import com.echoenglish.app.model.SubtitlePlaybackScope
 import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackContract
+import com.echoenglish.app.playback.PlaybackRestoreDecision
+import com.echoenglish.app.playback.PlaybackRestoreLoadState
+import com.echoenglish.app.playback.PlaybackRestorePolicy
 import com.echoenglish.app.playback.PlaybackService
 import com.echoenglish.app.playback.PlaybackServicePolicy
 import com.echoenglish.app.playback.PlaybackStopReason
@@ -27,10 +30,10 @@ import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
 import com.echoenglish.app.util.SubtitleTiming
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -48,6 +51,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val current = mutableCurrent.asStateFlow()
     private val mutableMessage = MutableStateFlow<String?>(null)
     val message = mutableMessage.asStateFlow()
+    private val mutableStartupRestoredTrackId = MutableStateFlow(0L)
+    val startupRestoredTrackId = mutableStartupRestoredTrackId.asStateFlow()
     private var originalCues: List<SrtCue> = emptyList()
     private var currentCues: List<SrtCue> = emptyList()
     private var currentSubtitleOffsetMs = 0L
@@ -58,7 +63,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastPlaybackError = ""
 
     init {
-        viewModelScope.launch { app.settingsRepository.settings.collect { mutableSettings.value = it } }
+        viewModelScope.launch {
+            var startupRestorePending = true
+            app.settingsRepository.settings.collect { value ->
+                mutableSettings.value = value
+                if (startupRestorePending) {
+                    startupRestorePending = false
+                    restoreStartup(value)
+                }
+            }
+        }
         viewModelScope.launch {
             playback.collect { state ->
                 if (state.errorMessage.isNotBlank() && state.errorMessage != lastPlaybackError) {
@@ -88,12 +102,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        viewModelScope.launch {
-            while (true) {
-                delay(1_500)
-                if (playback.value.isPlaying) persistProgress(false)
-            }
-        }
     }
 
     fun importUris(uris: List<Uri>) = viewModelScope.launch {
@@ -113,7 +121,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         try {
-            if (PlaybackServicePolicy.requiresForegroundStart(intent.action)) {
+            if (PlaybackServicePolicy.requiresForegroundStart(
+                    intent.action,
+                    intent.getBooleanExtra(PlaybackContract.EXTRA_AUTO_PLAY, true)
+                )
+            ) {
                 ContextCompat.startForegroundService(app, intent)
             } else {
                 app.startService(intent)
@@ -135,6 +147,77 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openTrack(track: TrackEntity) = viewModelScope.launch {
         val activeSettings = mutableSettings.value
+        if (!prepareTrack(track, activeSettings)) return@launch
+        mutableCurrent.value = track
+        app.settingsRepository.saveLastTrack(track.id)
+        sendTrackLoad(
+            track = track,
+            activeSettings = activeSettings,
+            loadState = PlaybackRestoreLoadState(
+                positionMs = track.currentPositionMs,
+                segmentIndex = track.currentSegment,
+                repeatIndex = 1,
+                autoPlay = true,
+                restoreExactPosition = false
+            )
+        )
+    }
+
+    private suspend fun restoreStartup(activeSettings: PlaybackSettings) {
+        val lastTrackId = app.settingsRepository.lastTrackId.first()
+        when (val decision = PlaybackRestorePolicy.decide(
+            activeMediaId = playback.value.mediaId,
+            activeSegmentCount = playback.value.segmentCount,
+            lastTrackId = lastTrackId,
+            activeServiceAvailable = PlaybackService.hasActiveInstance()
+        )) {
+            is PlaybackRestoreDecision.AttachToActive -> {
+                if (!attachToActiveTrack(decision.trackId, activeSettings) && lastTrackId > 0L) {
+                    loadSavedTrackPaused(lastTrackId, activeSettings)
+                }
+            }
+            is PlaybackRestoreDecision.LoadPaused ->
+                loadSavedTrackPaused(decision.trackId, activeSettings)
+            PlaybackRestoreDecision.None -> Unit
+        }
+    }
+
+    private suspend fun attachToActiveTrack(
+        trackId: Long,
+        activeSettings: PlaybackSettings
+    ): Boolean {
+        val track = dao.getById(trackId)?.takeIf { it.available } ?: return false
+        if (!prepareTrack(track, activeSettings)) return false
+        mutableCurrent.value = track
+        mutableStartupRestoredTrackId.value = track.id
+        return true
+    }
+
+    private suspend fun loadSavedTrackPaused(
+        trackId: Long,
+        activeSettings: PlaybackSettings
+    ) {
+        val track = dao.getById(trackId)
+        if (track == null || !track.available) {
+            mutableMessage.value = "上次播放的音频已不可用，请从播放列表重新选择"
+            return
+        }
+        if (!prepareTrack(track, activeSettings)) return
+        val loadState = PlaybackRestorePolicy.loadState(
+            trackId = track.id,
+            databasePositionMs = track.currentPositionMs,
+            databaseSegmentIndex = track.currentSegment,
+            session = app.playbackSessionStore.read()
+        )
+        mutableCurrent.value = track.copy(
+            currentPositionMs = loadState.positionMs,
+            currentSegment = loadState.segmentIndex
+        )
+        sendTrackLoad(track, activeSettings, loadState)
+        mutableStartupRestoredTrackId.value = track.id
+    }
+
+    private fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean {
         originalCues = readCues(track)
         currentSubtitleOffsetMs = SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)
         currentCues = SubtitleTiming.adjustCues(
@@ -148,14 +231,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableMessage.value = "当前音频没有有效字幕，本次临时使用固定时长分段"
         }
         currentSegments = buildSegments(activeSettings, track.durationMs)
-        val skipSubtitleGaps = shouldSkipSubtitleGaps(activeSettings, track.durationMs)
         if (currentSegments.isEmpty()) {
             mutableMessage.value = "无法生成播放片段，请检查音频时长或字幕"
-            return@launch
+            return false
         }
-        mutableCurrent.value = track
-        app.settingsRepository.saveLastTrack(track.id)
-        val targetSegment = track.currentSegment.coerceIn(0, currentSegments.lastIndex)
+        return true
+    }
+
+    private fun sendTrackLoad(
+        track: TrackEntity,
+        activeSettings: PlaybackSettings,
+        loadState: PlaybackRestoreLoadState
+    ) {
+        val targetSegment = loadState.segmentIndex.coerceIn(0, currentSegments.lastIndex)
         sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_LOAD
             putExtra(PlaybackContract.EXTRA_URI, track.audioUri)
@@ -170,9 +258,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
             putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
-            putExtra(PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS, skipSubtitleGaps)
+            putExtra(
+                PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
+                shouldSkipSubtitleGaps(activeSettings, track.durationMs)
+            )
             putExtra(PlaybackContract.EXTRA_INDEX, targetSegment)
-            putExtra(PlaybackContract.EXTRA_POSITION, track.currentPositionMs)
+            putExtra(PlaybackContract.EXTRA_POSITION, loadState.positionMs)
+            putExtra(PlaybackContract.EXTRA_REPEAT_INDEX, loadState.repeatIndex)
+            putExtra(PlaybackContract.EXTRA_AUTO_PLAY, loadState.autoPlay)
+            putExtra(
+                PlaybackContract.EXTRA_RESTORE_EXACT_POSITION,
+                loadState.restoreExactPosition
+            )
             putExtra(PlaybackContract.EXTRA_SPEED, activeSettings.speed)
         })
     }

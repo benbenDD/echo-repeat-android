@@ -9,6 +9,15 @@ class PlaybackServicePolicyTest {
         assertTrue(PlaybackServicePolicy.requiresForegroundStart(PlaybackContract.ACTION_LOAD))
     }
 
+    @Test fun pausedColdRestoreDoesNotRequestForegroundStart() {
+        assertFalse(
+            PlaybackServicePolicy.requiresForegroundStart(
+                PlaybackContract.ACTION_LOAD,
+                autoPlay = false
+            )
+        )
+    }
+
     @Test fun ordinaryUpdateDoesNotCreateForegroundService() {
         assertFalse(PlaybackServicePolicy.requiresForegroundStart(PlaybackContract.ACTION_UPDATE_SPEED))
     }

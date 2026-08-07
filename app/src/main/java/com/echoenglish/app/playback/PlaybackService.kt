@@ -1382,6 +1382,9 @@ class PlaybackService : MediaSessionService() {
             }
             return true
         }
+
+        fun hasActiveInstance(): Boolean = activeInstance != null
+
         private const val TICK_MS = 80L
         private const val ADJACENT_TOLERANCE_MS = 2L
         private const val MAX_GAP_WAKE_LOCK_MS = 10_000L

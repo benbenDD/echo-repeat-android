@@ -1,7 +1,8 @@
 package com.echoenglish.app.playback
 
 object PlaybackServicePolicy {
-    fun requiresForegroundStart(action: String?): Boolean = action == PlaybackContract.ACTION_LOAD
+    fun requiresForegroundStart(action: String?, autoPlay: Boolean = true): Boolean =
+        action == PlaybackContract.ACTION_LOAD && autoPlay
 
     fun shouldAdvancePlaylist(completed: Boolean, stopReason: PlaybackStopReason): Boolean =
         completed && stopReason == PlaybackStopReason.TRACK_COMPLETED
