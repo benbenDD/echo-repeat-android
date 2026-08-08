@@ -182,7 +182,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             activeMediaId = playback.value.mediaId,
             activeSegmentCount = playback.value.segmentCount,
             lastTrackId = lastTrackId,
-            activeServiceAvailable = PlaybackService.hasActiveInstance()
+            activeServiceAvailable = PlaybackService.hasLoadedSource(playback.value.mediaId)
         )) {
             is PlaybackRestoreDecision.AttachToActive -> {
                 if (!attachToActiveTrack(decision.trackId, activeSettings) && lastTrackId > 0L) {
