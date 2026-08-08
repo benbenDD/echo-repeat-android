@@ -10,6 +10,9 @@ object PlaybackServicePolicy {
     fun shouldKeepOnTaskRemoved(isPlaying: Boolean, mediaItemCount: Int): Boolean =
         isPlaying || mediaItemCount > 0
 
+    fun mayAutomateBoundary(stopReason: PlaybackStopReason): Boolean =
+        stopReason != PlaybackStopReason.SLEEP_TIMER
+
     fun shouldRetainForegroundDuringAutomation(
         startInForegroundRequired: Boolean,
         playbackTaskActive: Boolean,

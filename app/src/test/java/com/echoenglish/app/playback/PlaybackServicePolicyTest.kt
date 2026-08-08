@@ -96,4 +96,17 @@ class PlaybackServicePolicyTest {
             )
         )
     }
+
+    @Test fun sleepTimerStopBlocksBoundaryAutomation() {
+        assertFalse(
+            PlaybackServicePolicy.mayAutomateBoundary(PlaybackStopReason.SLEEP_TIMER)
+        )
+    }
+
+    @Test fun naturalPlaybackMayAutomateBoundary() {
+        assertTrue(PlaybackServicePolicy.mayAutomateBoundary(PlaybackStopReason.NONE))
+        assertTrue(
+            PlaybackServicePolicy.mayAutomateBoundary(PlaybackStopReason.TRACK_COMPLETED)
+        )
+    }
 }

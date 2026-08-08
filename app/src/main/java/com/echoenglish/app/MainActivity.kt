@@ -83,11 +83,17 @@ enum class Screen { LIBRARY, PLAYER, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private val openPlayerRequests = MutableStateFlow(0)
+    private val resumeRequests = MutableStateFlow(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (intent?.action == PlaybackContract.ACTION_OPEN_PLAYER) openPlayerRequests.value = 1
-        setContent { EchoTheme { EchoEnglishUi(openPlayerRequests) } }
+        setContent { EchoTheme { EchoEnglishUi(openPlayerRequests, resumeRequests) } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeRequests.value = resumeRequests.value + 1
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -121,7 +127,11 @@ private fun EchoTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel = viewModel()) {
+private fun EchoEnglishUi(
+    openPlayerRequests: StateFlow<Int>,
+    resumeRequests: StateFlow<Int>,
+    vm: MainViewModel = viewModel()
+) {
     val tracks by vm.tracks.collectAsState()
     val current by vm.current.collectAsState()
     val playback by vm.playback.collectAsState()
@@ -129,6 +139,7 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
     val message by vm.message.collectAsState()
     val startupRestoredTrackId by vm.startupRestoredTrackId.collectAsState()
     val openPlayerRequest by openPlayerRequests.collectAsState()
+    val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -147,6 +158,9 @@ private fun EchoEnglishUi(openPlayerRequests: StateFlow<Int>, vm: MainViewModel 
     }
     LaunchedEffect(startupRestoredTrackId) {
         if (startupRestoredTrackId > 0L) screen = Screen.PLAYER
+    }
+    LaunchedEffect(resumeRequest) {
+        if (resumeRequest > 0) vm.onAppForegrounded()
     }
 
     Scaffold(
