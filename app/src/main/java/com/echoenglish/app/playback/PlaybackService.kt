@@ -190,6 +190,7 @@ class PlaybackService : MediaSessionService() {
                         Log.i(TAG, "playbackState=$playbackState")
                         if (
                             playbackState == Player.STATE_ENDED &&
+                            PlaybackServicePolicy.mayAutomateBoundary(stopReason) &&
                             !completed &&
                             !transitionInProgress &&
                             starts.isNotEmpty()
@@ -757,11 +758,11 @@ class PlaybackService : MediaSessionService() {
 
     private fun stopForSleepTimer() {
         playbackTaskActive = false
-        cancelAutomatedWork(clearGap = true)
-        player.pause()
         pendingSleepStop = false
         completed = false
         stopReason = PlaybackStopReason.SLEEP_TIMER
+        cancelAutomatedWork(clearGap = true)
+        player.pause()
         Log.i(TAG, "sleep timer stopped playback without completing track")
         clearTimer(preserveStopReason = true)
     }
@@ -880,6 +881,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePlaybackWindowEnded() {
+        if (!PlaybackServicePolicy.mayAutomateBoundary(stopReason)) {
+            Log.i(TAG, "window end ignored after stop reason=$stopReason")
+            return
+        }
         if (transitionInProgress || completed || starts.isEmpty()) return
         cancelBoundary()
 
