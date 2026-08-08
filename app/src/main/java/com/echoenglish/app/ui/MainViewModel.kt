@@ -19,6 +19,8 @@ import com.echoenglish.app.model.SegmentMode
 import com.echoenglish.app.model.SrtCue
 import com.echoenglish.app.model.SubtitlePlaybackScope
 import com.echoenglish.app.playback.PlaybackBus
+import com.echoenglish.app.playback.PlaybackCommandRecoveryDecision
+import com.echoenglish.app.playback.PlaybackCommandRecoveryPolicy
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackRestoreDecision
 import com.echoenglish.app.playback.PlaybackRestoreLoadState
@@ -27,6 +29,7 @@ import com.echoenglish.app.playback.PlaybackService
 import com.echoenglish.app.playback.PlaybackServicePolicy
 import com.echoenglish.app.playback.PlaybackStopReason
 import com.echoenglish.app.playback.PlaylistNavigation
+import com.echoenglish.app.playback.SegmentPlaybackPolicy
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.SrtParser
 import com.echoenglish.app.util.SubtitleTiming
@@ -58,6 +61,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentSubtitleOffsetMs = 0L
     private var currentSegments: List<Segment> = emptyList()
     private val subtitleOffsetWriteMutex = Mutex()
+    private val playbackCommandMutex = Mutex()
     private var completionHandled = false
     private var sleepTimerStopHandled = false
     private var lastPlaybackError = ""
@@ -115,10 +119,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         importUris(library.collectTree(uri))
     }
 
-    private fun sendService(intent: Intent) {
+    private fun sendService(intent: Intent): Boolean {
         if (PlaybackService.dispatchToActiveService(intent)) {
             Log.d("EchoPlayback", "command sent to active service: " + intent.action)
-            return
+            return true
+        }
+        if (intent.action != PlaybackContract.ACTION_LOAD) {
+            Log.i(
+                "EchoPlayback",
+                "command deferred because playback source is missing: " + intent.action
+            )
+            return false
         }
         try {
             if (PlaybackServicePolicy.requiresForegroundStart(
@@ -130,6 +141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 app.startService(intent)
             }
+            return true
         } catch (error: RuntimeException) {
             val backgroundStartBlocked =
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
@@ -142,6 +154,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 error
             )
             mutableMessage.value = "\u7cfb\u7edf\u6682\u4e0d\u5141\u8bb8\u4ece\u540e\u53f0\u542f\u52a8\u64ad\u653e\uff0c\u8bf7\u56de\u5230\u5e94\u7528\u540e\u91cd\u8bd5"
+            return false
         }
     }
 
@@ -275,19 +288,165 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun command(action: String, position: Long? = null) {
-        sendService(Intent(app, PlaybackService::class.java).apply {
-            this.action = action
-            position?.let { putExtra(PlaybackContract.EXTRA_POSITION, it) }
-        })
+        viewModelScope.launch {
+            playbackCommandMutex.withLock {
+                deliverPlaybackCommand(action, position = position)
+            }
+        }
     }
 
     fun seekAbsolute(positionMs: Long) = command(PlaybackContract.ACTION_SEEK_ABSOLUTE, positionMs)
 
     fun seekToSegment(index: Int) {
-        sendService(Intent(app, PlaybackService::class.java).apply {
-            action = PlaybackContract.ACTION_SEEK_SEGMENT
-            putExtra(PlaybackContract.EXTRA_INDEX, index)
-        })
+        viewModelScope.launch {
+            playbackCommandMutex.withLock {
+                deliverPlaybackCommand(
+                    PlaybackContract.ACTION_SEEK_SEGMENT,
+                    segmentIndex = index
+                )
+            }
+        }
+    }
+
+    fun onAppForegrounded() {
+        viewModelScope.launch {
+            playbackCommandMutex.withLock {
+                val track = mutableCurrent.value ?: return@withLock
+                if (PlaybackService.hasLoadedSource(track.id.toString())) return@withLock
+                deliverPlaybackCommand(PlaybackCommandRecoveryPolicy.ACTION_FOREGROUND_RESUME)
+            }
+        }
+    }
+
+    private suspend fun deliverPlaybackCommand(
+        action: String,
+        position: Long? = null,
+        segmentIndex: Int? = null
+    ) {
+        val track = mutableCurrent.value
+        val sourceReady = track?.let {
+            PlaybackService.hasLoadedSource(it.id.toString())
+        } ?: false
+        if (sourceReady) {
+            if (action == PlaybackCommandRecoveryPolicy.ACTION_FOREGROUND_RESUME) return
+            if (sendService(commandIntent(action, position, segmentIndex))) return
+        }
+
+        when (val decision = PlaybackCommandRecoveryPolicy.decide(
+            action = action,
+            sourceReady = false,
+            hasSelectedTrack = track != null
+        )) {
+            PlaybackCommandRecoveryDecision.Dispatch -> Unit
+            PlaybackCommandRecoveryDecision.Ignore -> Unit
+            is PlaybackCommandRecoveryDecision.Recover -> recoverSelectedTrack(
+                track = track ?: return,
+                action = action,
+                position = position,
+                requestedSegmentIndex = segmentIndex,
+                autoPlay = decision.autoPlay
+            )
+        }
+    }
+
+    private fun commandIntent(
+        action: String,
+        position: Long?,
+        segmentIndex: Int?
+    ): Intent = Intent(app, PlaybackService::class.java).apply {
+        this.action = action
+        position?.let { putExtra(PlaybackContract.EXTRA_POSITION, it) }
+        segmentIndex?.let { putExtra(PlaybackContract.EXTRA_INDEX, it) }
+    }
+
+    private suspend fun recoverSelectedTrack(
+        track: TrackEntity,
+        action: String,
+        position: Long?,
+        requestedSegmentIndex: Int?,
+        autoPlay: Boolean
+    ) {
+        val activeSettings = mutableSettings.value
+        if (!prepareTrack(track, activeSettings)) return
+        val savedState = PlaybackRestorePolicy.loadState(
+            trackId = track.id,
+            databasePositionMs = track.currentPositionMs,
+            databaseSegmentIndex = track.currentSegment,
+            session = app.playbackSessionStore.read()
+        )
+        val safeIndex = savedState.segmentIndex.coerceIn(0, currentSegments.lastIndex)
+        val safePosition = savedState.positionMs.coerceIn(0L, track.durationMs)
+        val loadState = when (action) {
+            PlaybackCommandRecoveryPolicy.ACTION_FOREGROUND_RESUME,
+            PlaybackContract.ACTION_TOGGLE -> savedState.copy(
+                positionMs = safePosition,
+                segmentIndex = safeIndex,
+                autoPlay = autoPlay
+            )
+            PlaybackContract.ACTION_SEEK_ABSOLUTE -> savedState.copy(
+                positionMs = (position ?: safePosition).coerceIn(0L, track.durationMs),
+                segmentIndex = safeIndex,
+                repeatIndex = 1,
+                autoPlay = false
+            )
+            PlaybackContract.ACTION_SEEK_SEGMENT -> {
+                val targetIndex = (requestedSegmentIndex ?: safeIndex)
+                    .coerceIn(0, currentSegments.lastIndex)
+                savedState.copy(
+                    positionMs = currentSegments[targetIndex].startMs,
+                    segmentIndex = targetIndex,
+                    repeatIndex = 1,
+                    autoPlay = false
+                )
+            }
+            PlaybackContract.ACTION_NEXT -> {
+                val targetIndex = (safeIndex + 1).coerceAtMost(currentSegments.lastIndex)
+                savedState.copy(
+                    positionMs = currentSegments[targetIndex].startMs,
+                    segmentIndex = targetIndex,
+                    repeatIndex = 1,
+                    autoPlay = false
+                )
+            }
+            PlaybackContract.ACTION_PREVIOUS -> {
+                val positionInSegment = (safePosition - currentSegments[safeIndex].startMs)
+                    .coerceAtLeast(0L)
+                val targetIndex = SegmentPlaybackPolicy.previousTargetIndex(
+                    safeIndex,
+                    positionInSegment
+                )
+                savedState.copy(
+                    positionMs = currentSegments[targetIndex].startMs,
+                    segmentIndex = targetIndex,
+                    repeatIndex = 1,
+                    autoPlay = false
+                )
+            }
+            PlaybackContract.ACTION_RESTART -> savedState.copy(
+                positionMs = currentSegments[safeIndex].startMs,
+                segmentIndex = safeIndex,
+                repeatIndex = 1,
+                autoPlay = false
+            )
+            PlaybackContract.ACTION_SEEK -> savedState.copy(
+                positionMs = (currentSegments[safeIndex].startMs + (position ?: 0L))
+                    .coerceIn(
+                        currentSegments[safeIndex].startMs,
+                        currentSegments[safeIndex].endMs
+                    ),
+                segmentIndex = safeIndex,
+                repeatIndex = 1,
+                autoPlay = false
+            )
+            else -> return
+        }
+        Log.i(
+            "EchoPlayback",
+            "recovering missing source action=$action trackId=${track.id} " +
+                "position=${loadState.positionMs} segment=${loadState.segmentIndex} " +
+                "repeat=${loadState.repeatIndex} autoPlay=${loadState.autoPlay}"
+        )
+        sendTrackLoad(track, activeSettings, loadState)
     }
 
     fun updateSettings(value: PlaybackSettings) {

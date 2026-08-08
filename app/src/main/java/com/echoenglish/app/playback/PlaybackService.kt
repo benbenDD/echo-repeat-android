@@ -228,6 +228,7 @@ class PlaybackService : MediaSessionService() {
         stopAtSegmentEnd = prefs.getBoolean("stop_at_end", true)
         handler.post(ticker)
         activeInstance = this
+        activeSourceMediaId = null
         Log.i(TAG, "active service command dispatcher registered")
     }
 
@@ -337,6 +338,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun load(intent: Intent) {
+        if (activeInstance === this) activeSourceMediaId = null
         val uri = intent.getStringExtra(PlaybackContract.EXTRA_URI)?.toUri() ?: run {
             playbackError = "无法播放：音频地址为空"
             Log.e(TAG, playbackError)
@@ -418,6 +420,7 @@ class PlaybackService : MediaSessionService() {
             startPosition,
             shouldPlay = intent.getBooleanExtra(PlaybackContract.EXTRA_AUTO_PLAY, true)
         )
+        if (activeInstance === this) activeSourceMediaId = sourceMediaId
         publish()
     }
 
@@ -1357,6 +1360,7 @@ class PlaybackService : MediaSessionService() {
         handler.removeCallbacksAndMessages(null)
         if (activeInstance === this) {
             activeInstance = null
+            activeSourceMediaId = null
             Log.i(TAG, "active service command dispatcher cleared")
         }
         cancelBoundary()
@@ -1371,9 +1375,17 @@ class PlaybackService : MediaSessionService() {
         private const val TAG = "EchoPlayback"
         @Volatile
         private var activeInstance: PlaybackService? = null
+        @Volatile
+        private var activeSourceMediaId: String? = null
 
         fun dispatchToActiveService(intent: Intent): Boolean {
             val service = activeInstance ?: return false
+            if (
+                intent.action != PlaybackContract.ACTION_LOAD &&
+                activeSourceMediaId == null
+            ) {
+                return false
+            }
             val command = Intent(intent)
             service.handler.post {
                 if (activeInstance === service) {
@@ -1384,6 +1396,9 @@ class PlaybackService : MediaSessionService() {
         }
 
         fun hasActiveInstance(): Boolean = activeInstance != null
+
+        fun hasLoadedSource(mediaId: String): Boolean =
+            activeInstance != null && activeSourceMediaId == mediaId
 
         private const val TICK_MS = 80L
         private const val ADJACENT_TOLERANCE_MS = 2L

@@ -7,6 +7,8 @@ sealed interface PlaybackCommandRecoveryDecision {
 }
 
 object PlaybackCommandRecoveryPolicy {
+    const val ACTION_FOREGROUND_RESUME = "internal.FOREGROUND_RESUME"
+
     fun decide(
         action: String?,
         sourceReady: Boolean,
@@ -22,7 +24,8 @@ object PlaybackCommandRecoveryPolicy {
             PlaybackContract.ACTION_SEEK_SEGMENT,
             PlaybackContract.ACTION_NEXT,
             PlaybackContract.ACTION_PREVIOUS,
-            PlaybackContract.ACTION_RESTART ->
+            PlaybackContract.ACTION_RESTART,
+            ACTION_FOREGROUND_RESUME ->
                 PlaybackCommandRecoveryDecision.Recover(autoPlay = false)
             else -> PlaybackCommandRecoveryDecision.Ignore
         }

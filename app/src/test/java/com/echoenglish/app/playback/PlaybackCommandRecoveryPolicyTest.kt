@@ -68,4 +68,15 @@ class PlaybackCommandRecoveryPolicyTest {
             )
         )
     }
+
+    @Test fun foregroundResumeRecoversPaused() {
+        assertEquals(
+            PlaybackCommandRecoveryDecision.Recover(autoPlay = false),
+            PlaybackCommandRecoveryPolicy.decide(
+                PlaybackCommandRecoveryPolicy.ACTION_FOREGROUND_RESUME,
+                sourceReady = false,
+                hasSelectedTrack = true
+            )
+        )
+    }
 }
