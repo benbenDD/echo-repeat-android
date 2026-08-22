@@ -87,9 +87,14 @@ private val CardShape = RoundedCornerShape(22.dp)
 private val ControlShape = RoundedCornerShape(15.dp)
 
 private data class SegmentPickerRow(
-    val index: Int,
-    val segment: com.echoenglish.app.playback.SegmentSnapshot,
-    val cues: List<com.echoenglish.app.playback.SubtitleSnapshot>
+    val key: String,
+    val number: Int,
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val cueIds: List<Int>,
+    val bookmarked: Boolean,
+    val selected: Boolean
 )
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
@@ -201,7 +206,6 @@ private fun EchoEnglishUi(
                     state = playback,
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
-                    onSeekSegment = vm::seekToSegment,
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
@@ -365,7 +369,6 @@ private fun PlayerScreen(
     state: PlaybackSnapshot,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
-    onSeekSegment: (Int) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit,
     onTimer: (Int) -> Unit,
@@ -458,7 +461,7 @@ private fun PlayerScreen(
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
-    if (showSegments) SegmentPickerDialog(state, { showSegments = false }, onSeekSegment, onToggleBookmarks)
+    if (showSegments) SegmentPickerDialog(state, { showSegments = false }, onSeekAbsolute, onToggleBookmarks)
 }
 
 @Composable
@@ -553,21 +556,43 @@ private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText:
 private fun SegmentPickerDialog(
     state: PlaybackSnapshot,
     onDismiss: () -> Unit,
-    onSelect: (Int) -> Unit,
+    onSelect: (Long) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
-    val rows = state.segments.mapIndexedNotNull { index, segment ->
-        val cues = state.subtitles.filter { cue ->
-            cue.startMs < segment.endMs && cue.endMs > segment.startMs
+    val allRows = if (state.subtitles.isNotEmpty()) {
+        state.subtitles.mapIndexed { index, cue ->
+            SegmentPickerRow(
+                key = "cue-${cue.cueId}",
+                number = index + 1,
+                startMs = cue.startMs,
+                endMs = cue.endMs,
+                text = cue.text,
+                cueIds = listOf(cue.cueId),
+                bookmarked = cue.bookmarked,
+                selected = index == state.subtitleIndex
+            )
         }
-        SegmentPickerRow(index, segment, cues).takeIf { !bookmarkedOnly || cues.any { it.bookmarked } }
+    } else {
+        state.segments.mapIndexed { index, segment ->
+            SegmentPickerRow(
+                key = "segment-$index",
+                number = index + 1,
+                startMs = segment.startMs,
+                endMs = segment.endMs,
+                text = segment.text,
+                cueIds = emptyList(),
+                bookmarked = false,
+                selected = index == state.segmentIndex
+            )
+        }
     }
-    val initial = rows.indexOfFirst { it.index == state.segmentIndex }.coerceAtLeast(0)
+    val rows = allRows.filter { !bookmarkedOnly || it.bookmarked }
+    val initial = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
     val scope = rememberCoroutineScope()
     LaunchedEffect(bookmarkedOnly) {
-        val target = rows.indexOfFirst { it.index == state.segmentIndex }.coerceAtLeast(0)
+        val target = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
         if (rows.isNotEmpty()) listState.scrollToItem(target.coerceAtMost(rows.lastIndex))
     }
     AlertDialog(
@@ -580,7 +605,7 @@ private fun SegmentPickerDialog(
                     FilterChip(
                         selected = !bookmarkedOnly,
                         onClick = { bookmarkedOnly = false },
-                        label = { Text("全部片段") },
+                        label = { Text(if (state.subtitles.isNotEmpty()) "全部字幕" else "全部片段") },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
@@ -597,29 +622,24 @@ private fun SegmentPickerDialog(
                     }
                 } else Row(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
                     LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                items(rows, key = { it.index }) { row ->
-                    val index = row.index
-                    val segment = row.segment
-                    val selected = index == state.segmentIndex
-                    val segmentCues = row.cues
-                    val allBookmarked = segmentCues.isNotEmpty() && segmentCues.all { it.bookmarked }
+                items(rows, key = { it.key }) { row ->
                     Row(
-                        Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
-                            .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
-                            .clickable { onSelect(index); onDismiss() }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+                        Modifier.fillMaxWidth().background(if (row.selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
+                            .border(if (row.selected) 1.3.dp else 0.dp, if (row.selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
+                            .clickable { onSelect(row.startMs); onDismiss() }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("第 ${index + 1} 段 · ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
-                            if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
-                            if (segmentCues.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
+                            Text("第 ${row.number} 条 · ${formatTime(row.startMs)}–${formatTime(row.endMs)}", color = if (row.selected) Purple else Ink, fontWeight = FontWeight.Bold)
+                            if (row.text.isNotBlank()) Text(row.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+                            if (row.cueIds.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
                         }
-                        if (segmentCues.isNotEmpty()) {
-                            IconButton(onClick = { onToggleBookmarks(segmentCues.map { it.cueId }) }) {
+                        if (row.cueIds.isNotEmpty()) {
+                            IconButton(onClick = { onToggleBookmarks(row.cueIds) }) {
                                 RoundedGlyph(
                                     RoundedGlyphKind.BOOKMARK,
-                                    contentDescription = if (allBookmarked) "取消第 ${index + 1} 段书签" else "为第 ${index + 1} 段添加书签",
-                                    tint = if (allBookmarked) Coral else MutedInk
+                                    contentDescription = if (row.bookmarked) "取消第 ${row.number} 条字幕书签" else "为第 ${row.number} 条字幕添加书签",
+                                    tint = if (row.bookmarked) Coral else MutedInk
                                 )
                             }
                         }

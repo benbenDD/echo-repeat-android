@@ -832,8 +832,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun advancePlaylist() {
         val list = tracks.value
         val currentTrack = mutableCurrent.value ?: return
+        val activeSettings = mutableSettings.value
+        if (PlaylistNavigation.restartsCurrentTrack(activeSettings.playlistMode)) {
+            if (!prepareTrack(currentTrack, activeSettings)) return
+            val restartedTrack = currentTrack.copy(currentPositionMs = 0L, currentSegment = 0)
+            mutableCurrent.value = restartedTrack
+            sendTrackLoad(
+                restartedTrack,
+                activeSettings,
+                PlaybackRestoreLoadState(
+                    positionMs = 0L,
+                    segmentIndex = 0,
+                    repeatIndex = 1,
+                    autoPlay = true,
+                    restoreExactPosition = false
+                )
+            )
+            return
+        }
         val index = list.indexOfFirst { it.id == currentTrack.id }
-        PlaylistNavigation.nextIndex(mutableSettings.value.playlistMode, index, list.size)
+        PlaylistNavigation.nextIndex(activeSettings.playlistMode, index, list.size)
             ?.let { nextIndex -> list.getOrNull(nextIndex)?.let { openTrack(it) } }
     }
 }

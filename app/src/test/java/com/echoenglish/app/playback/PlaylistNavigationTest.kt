@@ -12,6 +12,8 @@ class PlaylistNavigationTest {
 
     @Test fun loopTrackReopensTheCurrentItem() {
         assertEquals(1, PlaylistNavigation.nextIndex(PlaylistMode.LOOP_TRACK, 1, 3))
+        assertEquals(true, PlaylistNavigation.restartsCurrentTrack(PlaylistMode.LOOP_TRACK))
+        assertEquals(false, PlaylistNavigation.restartsCurrentTrack(PlaylistMode.LOOP_LIST))
     }
 
     @Test fun sequentialMovesToNextAndStopsAtEnd() {
