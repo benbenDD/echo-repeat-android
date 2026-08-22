@@ -6,10 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DatabaseSchemaTest {
-    @Test fun databaseVersionIncludesSubtitleOffsetMigration() {
-        assertEquals(2, DatabaseSchema.VERSION)
+    @Test fun databaseVersionIncludesSubtitleOffsetAndBookmarkMigrations() {
+        assertEquals(3, DatabaseSchema.VERSION)
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("ADD COLUMN subtitleOffsetMs"))
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("DEFAULT 0"))
+        assertTrue(DatabaseSchema.MIGRATION_2_TO_3.contains("CREATE TABLE subtitle_bookmarks"))
+        assertTrue(DatabaseSchema.MIGRATION_2_TO_3.contains("PRIMARY KEY (trackId, cueIndex)"))
     }
 
     @Test fun oldTracksDefaultToZeroSubtitleOffset() {

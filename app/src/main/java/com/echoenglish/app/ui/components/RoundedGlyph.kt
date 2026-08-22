@@ -31,6 +31,7 @@ enum class RoundedGlyphKind {
     BEDTIME,
     ALARM,
     TARGET,
+    BOOKMARK,
     PREVIOUS,
     NEXT
 }
@@ -191,6 +192,18 @@ fun RoundedGlyph(
                 drawCircle(tint, 1f * s, p(12f, 12f))
                 drawLine(tint, p(12f, 2f), p(12f, 5f), line, StrokeCap.Round)
                 drawLine(tint, p(12f, 19f), p(12f, 22f), line, StrokeCap.Round)
+            }
+
+            RoundedGlyphKind.BOOKMARK -> {
+                val path = Path().apply {
+                    moveTo(6f * s, 3.5f * s)
+                    lineTo(18f * s, 3.5f * s)
+                    lineTo(18f * s, 20.5f * s)
+                    lineTo(12f * s, 16.5f * s)
+                    lineTo(6f * s, 20.5f * s)
+                    close()
+                }
+                drawPath(path, tint, style = stroke)
             }
 
             RoundedGlyphKind.PREVIOUS -> {

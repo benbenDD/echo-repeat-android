@@ -45,7 +45,46 @@ class TrackDao(private val db: AppDatabase) {
         }, "id=?", arrayOf(id.toString())); refresh()
     }
 
+    suspend fun getBookmarkedCueIds(trackId: Long): Set<Int> = withContext(Dispatchers.IO) {
+        val result = linkedSetOf<Int>()
+        db.readableDatabase.query(
+            "subtitle_bookmarks",
+            arrayOf("cueIndex"),
+            "trackId=?",
+            arrayOf(trackId.toString()),
+            null,
+            null,
+            "cueIndex ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) result += cursor.getInt(0)
+        }
+        result
+    }
+
+    suspend fun setCueBookmarked(trackId: Long, cueIndex: Int, bookmarked: Boolean) =
+        withContext(Dispatchers.IO) {
+            if (bookmarked) {
+                db.writableDatabase.insertWithOnConflict(
+                    "subtitle_bookmarks",
+                    null,
+                    ContentValues().apply {
+                        put("trackId", trackId)
+                        put("cueIndex", cueIndex)
+                        put("createdAt", System.currentTimeMillis())
+                    },
+                    SQLiteDatabase.CONFLICT_IGNORE
+                )
+            } else {
+                db.writableDatabase.delete(
+                    "subtitle_bookmarks",
+                    "trackId=? AND cueIndex=?",
+                    arrayOf(trackId.toString(), cueIndex.toString())
+                )
+            }
+        }
+
     suspend fun delete(track: TrackEntity) = withContext(Dispatchers.IO) {
+        db.writableDatabase.delete("subtitle_bookmarks", "trackId=?", arrayOf(track.id.toString()))
         db.writableDatabase.delete("tracks", "id=?", arrayOf(track.id.toString())); refresh()
     }
 

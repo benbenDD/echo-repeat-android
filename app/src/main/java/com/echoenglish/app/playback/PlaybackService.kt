@@ -57,6 +57,8 @@ class PlaybackService : MediaSessionService() {
     private var cueStarts = longArrayOf()
     private var cueEnds = longArrayOf()
     private var cueTexts = emptyArray<String>()
+    private var cueIds = intArrayOf()
+    private var bookmarkedCueIds = emptySet<Int>()
     private var segmentCache = emptyList<SegmentSnapshot>()
     private var subtitleCache = emptyList<SubtitleSnapshot>()
     private var segmentIndex = 0
@@ -275,6 +277,7 @@ class PlaybackService : MediaSessionService() {
             PlaybackContract.ACTION_SEEK_ABSOLUTE -> seekAbsolute(intent.getLongExtra(PlaybackContract.EXTRA_POSITION, 0))
             PlaybackContract.ACTION_SEEK_SEGMENT -> moveTo(intent.getIntExtra(PlaybackContract.EXTRA_INDEX, segmentIndex))
             PlaybackContract.ACTION_UPDATE_SEGMENTS -> updateSegments(intent)
+            PlaybackContract.ACTION_UPDATE_BOOKMARKS -> updateBookmarks(intent)
             PlaybackContract.ACTION_UPDATE_REPEATS -> updateRepeats(intent.getIntExtra(PlaybackContract.EXTRA_REPEATS, repeatCount))
             PlaybackContract.ACTION_UPDATE_GAP -> updateGap(intent.getLongExtra(PlaybackContract.EXTRA_GAP_MS, segmentGapMs))
             PlaybackContract.ACTION_UPDATE_SPEED -> updateSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
@@ -366,6 +369,10 @@ class PlaybackService : MediaSessionService() {
         cueStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_STARTS) ?: longArrayOf()
         cueEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_ENDS) ?: longArrayOf()
         cueTexts = intent.getStringArrayExtra(PlaybackContract.EXTRA_CUE_TEXTS) ?: emptyArray()
+        cueIds = intent.getIntArrayExtra(PlaybackContract.EXTRA_CUE_IDS) ?: IntArray(cueStarts.size) { it }
+        bookmarkedCueIds = intent.getIntArrayExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS)
+            ?.toSet()
+            .orEmpty()
         rebuildCaches()
         repeatCount = intent.getIntExtra(PlaybackContract.EXTRA_REPEATS, 1).coerceAtLeast(0)
         segmentGapMs = SegmentPlaybackPolicy.normalizedGapMs(
@@ -464,7 +471,7 @@ class PlaybackService : MediaSessionService() {
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(currentTitle)
-                    .setArtist("回声英语 · 分段复读")
+                    .setArtist("回声复读 · 分段听读")
                     .build()
             )
         if (windowStartMs > 0 || windowEndMs < knownDurationMs) {
@@ -647,6 +654,10 @@ class PlaybackService : MediaSessionService() {
         intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_STARTS)?.let { cueStarts = it }
         intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_ENDS)?.let { cueEnds = it }
         intent.getStringArrayExtra(PlaybackContract.EXTRA_CUE_TEXTS)?.let { cueTexts = it }
+        intent.getIntArrayExtra(PlaybackContract.EXTRA_CUE_IDS)?.let { cueIds = it }
+        intent.getIntArrayExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS)?.let {
+            bookmarkedCueIds = it.toSet()
+        }
         val target = PlaybackMath.snapToPlayablePosition(
             starts,
             ends,
@@ -672,6 +683,14 @@ class PlaybackService : MediaSessionService() {
             )
         }
         startPlaybackAt(alignedTarget, continuePlaying)
+        publish()
+    }
+
+    private fun updateBookmarks(intent: Intent) {
+        bookmarkedCueIds = intent.getIntArrayExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS)
+            ?.toSet()
+            .orEmpty()
+        rebuildCaches()
         publish()
     }
 
@@ -1211,9 +1230,11 @@ class PlaybackService : MediaSessionService() {
         subtitleCache = cueStarts.indices.mapNotNull { index ->
             cueTexts.getOrNull(index)?.let {
                 SubtitleSnapshot(
+                    cueIds.getOrElse(index) { index },
                     cueStarts[index],
                     cueEnds.getOrElse(index) { cueStarts[index] },
-                    it
+                    it,
+                    cueIds.getOrElse(index) { index } in bookmarkedCueIds
                 )
             }
         }
@@ -1254,15 +1275,16 @@ class PlaybackService : MediaSessionService() {
         } else {
             position
         }
-        val timelineCueIndex = PlaybackMath.subtitleIndexAt(cueStarts, subtitlePosition)
-        val segmentCueIndex = cueStarts.indices.firstOrNull { index ->
-            cueStarts[index] < end && cueEnds.getOrElse(index) { cueStarts[index] } > start
-        }
-        val cueIndex = if (skipSubtitleGaps) segmentCueIndex ?: timelineCueIndex else timelineCueIndex
-        val currentText = if (skipSubtitleGaps) {
-            texts.getOrElse(segmentIndex) { cueTexts.getOrElse(cueIndex) { "" } }
-        } else {
-            cueTexts.getOrElse(cueIndex) { texts.getOrElse(segmentIndex) { "" } }
+        val cueIndex = PlaybackMath.subtitleIndexForPlayback(
+            starts = cueStarts,
+            ends = cueEnds,
+            positionMs = subtitlePosition,
+            segmentStartMs = start,
+            segmentEndMs = end,
+            preferSegmentCueDuringLeadIn = skipSubtitleGaps
+        )
+        val currentText = cueTexts.getOrElse(cueIndex) {
+            texts.getOrElse(segmentIndex) { "" }
         }
         val nextText = cueTexts.getOrElse(cueIndex + 1) {
             texts.getOrElse(segmentIndex + 1) { "" }

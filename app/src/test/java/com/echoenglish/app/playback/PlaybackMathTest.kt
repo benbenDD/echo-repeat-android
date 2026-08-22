@@ -38,4 +38,35 @@ class PlaybackMathTest {
     @Test fun subtitleIndexUsesLastStartedCue() {
         assertEquals(1, PlaybackMath.subtitleIndexAt(longArrayOf(1_000, 4_000, 9_000), 7_000))
     }
+
+    @Test fun mergedSegmentAdvancesToTheCueThatHasActuallyStarted() {
+        val starts = longArrayOf(1_000, 2_500, 4_000)
+        val ends = longArrayOf(3_000, 4_200, 5_000)
+
+        assertEquals(
+            1,
+            PlaybackMath.subtitleIndexForPlayback(
+                starts = starts,
+                ends = ends,
+                positionMs = 2_700,
+                segmentStartMs = 700,
+                segmentEndMs = 5_500,
+                preferSegmentCueDuringLeadIn = true
+            )
+        )
+    }
+
+    @Test fun cueOnlyLeadInShowsUpcomingCueInsteadOfPreviousTimelineCue() {
+        assertEquals(
+            1,
+            PlaybackMath.subtitleIndexForPlayback(
+                starts = longArrayOf(1_000, 5_000),
+                ends = longArrayOf(2_000, 6_000),
+                positionMs = 4_700,
+                segmentStartMs = 4_700,
+                segmentEndMs = 6_500,
+                preferSegmentCueDuringLeadIn = true
+            )
+        )
+    }
 }

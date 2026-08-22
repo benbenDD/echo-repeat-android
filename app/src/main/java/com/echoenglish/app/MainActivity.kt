@@ -189,6 +189,7 @@ private fun EchoEnglishUi(
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
                     onSeekSegment = vm::seekToSegment,
+                    onToggleBookmark = vm::toggleBookmark,
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = Screen.LIBRARY }
                 )
@@ -227,7 +228,7 @@ private fun LibraryScreen(
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("回声英语", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
+                Text("回声复读", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
                 Text("把长音频变成容易掌握的小段落", color = MutedInk, fontSize = 14.sp)
             }
             Surface(shape = CircleShape, color = YellowLight, modifier = Modifier.size(52.dp)) {
@@ -329,6 +330,7 @@ private fun PlayerScreen(
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
     onSeekSegment: (Int) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
     onTimer: (Int) -> Unit,
     onLibrary: () -> Unit
 ) {
@@ -358,8 +360,8 @@ private fun PlayerScreen(
                 )
             }
         }
-        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 126.dp)
-        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute)
+        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 180.dp)
+        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute, onToggleBookmark)
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             InfoPill("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段", PurpleLight, Purple)
@@ -423,7 +425,7 @@ private fun PlayerScreen(
 }
 
 @Composable
-private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit) {
+private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit, onToggleBookmark: (Int) -> Unit) {
     val listState = rememberLazyListState()
     var userBrowsing by remember { mutableStateOf(false) }
     var autoScrolling by remember { mutableStateOf(false) }
@@ -448,6 +450,11 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = MutedInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                state.subtitles.getOrNull(state.subtitleIndex)?.let { cue ->
+                    IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
+                        RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消收藏当前字幕" else "收藏当前字幕", tint = if (cue.bookmarked) Coral else MutedInk)
+                    }
+                }
                 if (state.subtitles.isNotEmpty()) {
                     TextButton(onClick = { onExpandedChange(!expanded) }) {
                         Text(if (expanded) "收起" else "展开字幕", color = Purple, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -472,14 +479,20 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                 LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     itemsIndexed(state.subtitles) { index, cue ->
                         val selected = index == state.subtitleIndex
-                        Column(
+                        Row(
                             Modifier.fillMaxWidth().padding(horizontal = 10.dp)
                                 .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(14.dp))
                                 .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(14.dp))
-                                .clickable { onSubtitleClick(cue.startMs) }.padding(horizontal = 14.dp, vertical = 10.dp)
+                                .clickable { onSubtitleClick(cue.startMs) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(formatTime(cue.startMs), color = if (selected) Purple else MutedInk, fontSize = 11.sp)
-                            Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            Column(Modifier.weight(1f)) {
+                                Text(formatTime(cue.startMs), color = if (selected) Purple else MutedInk, fontSize = 11.sp)
+                                Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            }
+                            IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
+                                RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消收藏" else "收藏字幕", tint = if (cue.bookmarked) Coral else MutedInk)
+                            }
                         }
                     }
                 }
@@ -638,7 +651,8 @@ private fun SettingsScreen(
                 ChoiceGrid(
                     listOf(
                         "播放完整时间线" to SubtitlePlaybackScope.FULL_TIMELINE,
-                        "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY
+                        "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY,
+                        "仅播放收藏字幕" to SubtitlePlaybackScope.BOOKMARKED_CUES
                     ),
                     value.subtitlePlaybackScope,
                     enabled
@@ -647,7 +661,7 @@ private fun SettingsScreen(
         }
         if (
             value.segmentMode == SegmentMode.SUBTITLE &&
-            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY
+            value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE
         ) {
             item {
                 SettingCard(

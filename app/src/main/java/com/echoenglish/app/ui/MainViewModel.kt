@@ -31,6 +31,7 @@ import com.echoenglish.app.playback.PlaybackStopReason
 import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.playback.SegmentPlaybackPolicy
 import com.echoenglish.app.util.Segmenter
+import com.echoenglish.app.util.BookmarkSelection
 import com.echoenglish.app.util.SrtParser
 import com.echoenglish.app.util.SubtitleTiming
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +61,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var currentCues: List<SrtCue> = emptyList()
     private var currentSubtitleOffsetMs = 0L
     private var currentSegments: List<Segment> = emptyList()
+    private var bookmarkedCueIds: Set<Int> = emptySet()
     private val subtitleOffsetWriteMutex = Mutex()
     private val playbackCommandMutex = Mutex()
     private var completionHandled = false
@@ -230,8 +232,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableStartupRestoredTrackId.value = track.id
     }
 
-    private fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean {
+    private suspend fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean {
         originalCues = readCues(track)
+        bookmarkedCueIds = dao.getBookmarkedCueIds(track.id)
         currentSubtitleOffsetMs = SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)
         currentCues = SubtitleTiming.adjustCues(
             originalCues,
@@ -269,6 +272,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_IDS, currentCues.map { it.index }.toIntArray())
+            putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
             putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
             putExtra(
@@ -288,6 +293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun command(action: String, position: Long? = null) {
+        Log.i("EchoPlayback", "command requested source=player_ui action=$action")
         viewModelScope.launch {
             playbackCommandMutex.withLock {
                 deliverPlaybackCommand(action, position = position)
@@ -305,6 +311,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     segmentIndex = index
                 )
             }
+        }
+    }
+
+    fun toggleBookmark(cueId: Int) {
+        val track = mutableCurrent.value ?: return
+        if (currentCues.none { it.index == cueId }) return
+        viewModelScope.launch {
+            val bookmarked = cueId !in bookmarkedCueIds
+            dao.setCueBookmarked(track.id, cueId, bookmarked)
+            bookmarkedCueIds = if (bookmarked) {
+                bookmarkedCueIds + cueId
+            } else {
+                bookmarkedCueIds - cueId
+            }
+
+            val activeSettings = mutableSettings.value
+            if (activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
+                if (bookmarkedCueIds.isEmpty()) {
+                    val fallback = activeSettings.copy(
+                        subtitlePlaybackScope = SubtitlePlaybackScope.CUES_ONLY
+                    )
+                    mutableSettings.value = fallback
+                    app.settingsRepository.save(fallback)
+                    mutableMessage.value = "已取消最后一个书签，播放范围已切回全部字幕片段"
+                    rebuildActiveSegments(fallback)
+                } else {
+                    rebuildActiveSegments(activeSettings)
+                }
+            } else {
+                sendService(Intent(app, PlaybackService::class.java).apply {
+                    action = PlaybackContract.ACTION_UPDATE_BOOKMARKS
+                    putExtra(
+                        PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS,
+                        bookmarkedCueIds.toIntArray()
+                    )
+                })
+            }
+            mutableMessage.value = if (bookmarked) "已收藏当前字幕" else "已取消收藏"
         }
     }
 
@@ -454,11 +498,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (value.segmentMode == SegmentMode.SUBTITLE && currentTrack != null &&
             Segmenter.cueOnly(currentCues, currentTrack.durationMs).isEmpty()
         ) {
-            mutableMessage.value = if (value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY) {
+            mutableMessage.value = if (value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE) {
                 "当前音频没有匹配的有效字幕，无法只播放字幕片段"
             } else {
                 "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
             }
+            return
+        }
+        if (
+            value.segmentMode == SegmentMode.SUBTITLE &&
+            value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES &&
+            bookmarkedCueIds.isEmpty()
+        ) {
+            mutableMessage.value = "当前音频还没有收藏字幕，请先在播放页添加书签"
             return
         }
         val previous = mutableSettings.value
@@ -474,7 +526,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val paddingChanged = (previous.leadInMs != value.leadInMs ||
             previous.leadOutMs != value.leadOutMs) &&
             value.segmentMode == SegmentMode.SUBTITLE &&
-            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY
+            value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE
         if (mutableCurrent.value != null && (
                 previous.segmentSeconds != value.segmentSeconds ||
                     previous.segmentMode != value.segmentMode ||
@@ -536,6 +588,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_IDS, currentCues.map { it.index }.toIntArray())
+            putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
             putExtra(
                 PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
                 shouldSkipSubtitleGaps(value, track.durationMs)
@@ -546,16 +600,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun buildSegments(value: PlaybackSettings, durationMs: Long): List<Segment> {
         if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isNotEmpty()) {
-            return if (value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY) {
+            return if (value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE) {
+                val playableCues = if (value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
+                    BookmarkSelection.filter(currentCues, bookmarkedCueIds)
+                } else {
+                    currentCues
+                }
                 Segmenter.cueOnly(
-                    currentCues,
+                    playableCues,
                     durationMs,
                     value.leadInMs,
                     value.leadOutMs
                 ).also { finalSegments ->
                     Log.i(
                         "EchoSegments",
-                        "mode=SUBTITLE scope=CUES_ONLY subtitleOffsetMs=$currentSubtitleOffsetMs " +
+                        "mode=SUBTITLE scope=${value.subtitlePlaybackScope} subtitleOffsetMs=$currentSubtitleOffsetMs " +
                             "leadInMs=${value.leadInMs} leadOutMs=${value.leadOutMs} " +
                             "originalCues=${originalCues.size} adjustedCues=${currentCues.size} " +
                             "finalSegments=${finalSegments.size} firstOriginal=${originalCues.firstOrNull()} " +
@@ -574,8 +633,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun shouldSkipSubtitleGaps(value: PlaybackSettings, durationMs: Long): Boolean =
         value.segmentMode == SegmentMode.SUBTITLE &&
-            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY &&
-            Segmenter.cueOnly(currentCues, durationMs).isNotEmpty()
+            value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE &&
+            Segmenter.cueOnly(
+                if (value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
+                    BookmarkSelection.filter(currentCues, bookmarkedCueIds)
+                } else currentCues,
+                durationMs
+            ).isNotEmpty()
 
     private fun readCues(track: TrackEntity): List<SrtCue> = track.subtitleUri?.let { uri ->
         runCatching { app.contentResolver.openInputStream(Uri.parse(uri))?.use(SrtParser::parse) }.getOrNull()
@@ -646,6 +710,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_STARTS, currentCues.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_ENDS, currentCues.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_CUE_TEXTS, currentCues.map { it.text }.toTypedArray())
+            putExtra(PlaybackContract.EXTRA_CUE_IDS, currentCues.map { it.index }.toIntArray())
+            putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
             putExtra(
                 PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
                 shouldSkipSubtitleGaps(activeSettings, track.durationMs)
