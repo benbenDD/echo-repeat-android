@@ -22,6 +22,7 @@ import com.echoenglish.app.model.SubtitlePlaybackScope
 import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackCommandRecoveryDecision
 import com.echoenglish.app.playback.PlaybackCommandRecoveryPolicy
+import com.echoenglish.app.playback.PlaybackConfigurationPolicy
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackRestoreDecision
 import com.echoenglish.app.playback.PlaybackRestoreLoadState
@@ -31,6 +32,7 @@ import com.echoenglish.app.playback.PlaybackServicePolicy
 import com.echoenglish.app.playback.PlaybackStopReason
 import com.echoenglish.app.playback.PlaylistNavigation
 import com.echoenglish.app.playback.SegmentPlaybackPolicy
+import com.echoenglish.app.playback.SubtitleSnapshot
 import com.echoenglish.app.util.Segmenter
 import com.echoenglish.app.util.BookmarkSelection
 import com.echoenglish.app.util.SrtParser
@@ -58,6 +60,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val message = mutableMessage.asStateFlow()
     private val mutableStartupRestoredTrackId = MutableStateFlow(0L)
     val startupRestoredTrackId = mutableStartupRestoredTrackId.asStateFlow()
+    private val mutableLocatorSubtitles = MutableStateFlow<List<SubtitleSnapshot>>(emptyList())
+    val locatorSubtitles = mutableLocatorSubtitles.asStateFlow()
     private var originalCues: List<SrtCue> = emptyList()
     private var currentCues: List<SrtCue> = emptyList()
     private var currentSubtitleOffsetMs = 0L
@@ -69,6 +73,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var completionHandled = false
     private var sleepTimerStopHandled = false
     private var lastPlaybackError = ""
+    private var playbackConfigurationGeneration = 0L
 
     init {
         viewModelScope.launch {
@@ -102,8 +107,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ) {
                     sleepTimerStopHandled = false
                     completionHandled = true
+                    val completionGeneration = playbackConfigurationGeneration
                     persistProgress(true)
-                    advancePlaylist()
+                    advancePlaylist(completionGeneration)
                 } else if (!state.completed) {
                     sleepTimerStopHandled = false
                     completionHandled = false
@@ -162,9 +168,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openTrack(track: TrackEntity) = viewModelScope.launch {
+    fun openTrack(track: TrackEntity) {
+        val generation = ++playbackConfigurationGeneration
+        viewModelScope.launch {
         val activeSettings = mutableSettings.value
         if (!prepareTrack(track, activeSettings)) return@launch
+        if (!PlaybackConfigurationPolicy.isCurrent(generation, playbackConfigurationGeneration)) return@launch
         mutableCurrent.value = track
         app.settingsRepository.saveLastTrack(track.id)
         sendTrackLoad(
@@ -178,6 +187,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 restoreExactPosition = false
             )
         )
+        }
     }
 
     private suspend fun restoreStartup(activeSettings: PlaybackSettings) {
@@ -244,6 +254,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentSubtitleOffsetMs,
             track.durationMs
         )
+        publishLocatorSubtitles()
         if (activeSettings.segmentMode == SegmentMode.SUBTITLE &&
             Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
         ) {
@@ -361,6 +372,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 })
             }
             mutableMessage.value = if (bookmarked) "已添加当前字幕书签" else "已取消当前字幕书签"
+            publishLocatorSubtitles()
             }
         }
     }
@@ -393,6 +405,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 })
                 mutableMessage.value = if (shouldBookmark) "已添加这个片段的字幕书签" else "已取消这个片段的字幕书签"
             }
+            publishLocatorSubtitles()
             }
         }
     }
@@ -546,8 +559,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             value
         )
         if (segmentationChanged && currentTrack != null) {
+            val generation = ++playbackConfigurationGeneration
             viewModelScope.launch {
                 trackStateMutex.withLock {
+                    if (!PlaybackConfigurationPolicy.isCurrent(generation, playbackConfigurationGeneration)) return@withLock
                     if (mutableCurrent.value?.id != currentTrack.id) return@withLock
                     if (value.segmentMode == SegmentMode.SUBTITLE &&
                         Segmenter.cueOnly(currentCues, currentTrack.durationMs).isEmpty()
@@ -563,6 +578,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES
                     ) {
                         bookmarkedCueIds = dao.getBookmarkedCueIds(currentTrack.id)
+                        publishLocatorSubtitles()
                         if (bookmarkedCueIds.isEmpty()) {
                             mutableMessage.value = "当前音频还没有字幕书签，请先在播放页添加书签"
                             return@withLock
@@ -623,6 +639,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         value: PlaybackSettings,
         alignToSegmentStart: Boolean = false
     ) {
+        playbackConfigurationGeneration++
         val track = mutableCurrent.value ?: return
         if (value.segmentMode == SegmentMode.SUBTITLE &&
             Segmenter.cueOnly(currentCues, track.durationMs).isEmpty()
@@ -739,6 +756,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentSubtitleOffsetMs,
             track.durationMs
         )
+        publishLocatorSubtitles()
         val updatedTrack = track.copy(subtitleOffsetMs = currentSubtitleOffsetMs)
         mutableCurrent.value = updatedTrack
         subtitleOffsetWriteMutex.withLock {
@@ -820,6 +838,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         })
     }
 
+    private fun publishLocatorSubtitles() {
+        mutableLocatorSubtitles.value = currentCues.map { cue ->
+            SubtitleSnapshot(
+                cueId = cue.index,
+                startMs = cue.startMs,
+                endMs = cue.endMs,
+                text = cue.text,
+                bookmarked = cue.index in bookmarkedCueIds
+            )
+        }
+    }
+
     fun delete(track: TrackEntity) = viewModelScope.launch { dao.delete(track) }
     fun clearMessage() { mutableMessage.value = null }
 
@@ -829,12 +859,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         dao.updateProgress(track.id, state.positionMs, state.segmentIndex, System.currentTimeMillis(), completed)
     }
 
-    private suspend fun advancePlaylist() {
+    private suspend fun advancePlaylist(expectedGeneration: Long) {
+        if (!PlaybackConfigurationPolicy.isCurrent(expectedGeneration, playbackConfigurationGeneration)) return
         val list = tracks.value
         val currentTrack = mutableCurrent.value ?: return
         val activeSettings = mutableSettings.value
         if (PlaylistNavigation.restartsCurrentTrack(activeSettings.playlistMode)) {
             if (!prepareTrack(currentTrack, activeSettings)) return
+            if (!PlaybackConfigurationPolicy.isCurrent(expectedGeneration, playbackConfigurationGeneration)) {
+                Log.i("EchoPlayback", "stale single-track loop reload ignored generation=$expectedGeneration current=$playbackConfigurationGeneration")
+                return
+            }
             val restartedTrack = currentTrack.copy(currentPositionMs = 0L, currentSegment = 0)
             mutableCurrent.value = restartedTrack
             sendTrackLoad(

@@ -55,6 +55,7 @@ import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackSnapshot
+import com.echoenglish.app.playback.SubtitleSnapshot
 import com.echoenglish.app.ui.MainViewModel
 import com.echoenglish.app.ui.components.RoundedGlyph
 import com.echoenglish.app.ui.components.RoundedGlyphKind
@@ -156,6 +157,7 @@ private fun EchoEnglishUi(
     val settings by vm.settings.collectAsState()
     val message by vm.message.collectAsState()
     val startupRestoredTrackId by vm.startupRestoredTrackId.collectAsState()
+    val locatorSubtitles by vm.locatorSubtitles.collectAsState()
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
@@ -204,6 +206,7 @@ private fun EchoEnglishUi(
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
                     state = playback,
+                    locatorSubtitles = locatorSubtitles,
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
                     onToggleBookmark = vm::toggleBookmark,
@@ -367,6 +370,7 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
 private fun PlayerScreen(
     title: String,
     state: PlaybackSnapshot,
+    locatorSubtitles: List<SubtitleSnapshot>,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
     onToggleBookmark: (Int) -> Unit,
@@ -461,7 +465,7 @@ private fun PlayerScreen(
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
-    if (showSegments) SegmentPickerDialog(state, { showSegments = false }, onSeekAbsolute, onToggleBookmarks)
+    if (showSegments) SegmentPickerDialog(state, locatorSubtitles, { showSegments = false }, onSeekAbsolute, onToggleBookmarks)
 }
 
 @Composable
@@ -555,13 +559,14 @@ private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText:
 @Composable
 private fun SegmentPickerDialog(
     state: PlaybackSnapshot,
+    locatorSubtitles: List<SubtitleSnapshot>,
     onDismiss: () -> Unit,
     onSelect: (Long) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
-    val allRows = if (state.subtitles.isNotEmpty()) {
-        state.subtitles.mapIndexed { index, cue ->
+    val allRows = if (locatorSubtitles.isNotEmpty()) {
+        locatorSubtitles.mapIndexed { index, cue ->
             SegmentPickerRow(
                 key = "cue-${cue.cueId}",
                 number = index + 1,
@@ -605,7 +610,7 @@ private fun SegmentPickerDialog(
                     FilterChip(
                         selected = !bookmarkedOnly,
                         onClick = { bookmarkedOnly = false },
-                        label = { Text(if (state.subtitles.isNotEmpty()) "全部字幕" else "全部片段") },
+                        label = { Text(if (locatorSubtitles.isNotEmpty()) "全部字幕" else "全部片段") },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
