@@ -12,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,6 +39,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +61,7 @@ import com.echoenglish.app.ui.components.RoundedGlyphKind
 import com.echoenglish.app.util.SelectionLogic
 import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -78,6 +85,12 @@ private val SoftBorder = Color(0xFFE8E1DC)
 
 private val CardShape = RoundedCornerShape(22.dp)
 private val ControlShape = RoundedCornerShape(15.dp)
+
+private data class SegmentPickerRow(
+    val index: Int,
+    val segment: com.echoenglish.app.playback.SegmentSnapshot,
+    val cues: List<com.echoenglish.app.playback.SubtitleSnapshot>
+)
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
 
@@ -476,7 +489,7 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                 Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = MutedInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 state.subtitles.getOrNull(state.subtitleIndex)?.let { cue ->
                     IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
-                        RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消收藏当前字幕" else "收藏当前字幕", tint = if (cue.bookmarked) Coral else MutedInk)
+                        RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消当前字幕书签" else "为当前字幕添加书签", tint = if (cue.bookmarked) Coral else MutedInk)
                     }
                 }
                 if (state.subtitles.isNotEmpty()) {
@@ -515,7 +528,7 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                                 Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                             }
                             IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
-                                RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消收藏" else "收藏字幕", tint = if (cue.bookmarked) Coral else MutedInk)
+                                RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消字幕书签" else "为字幕添加书签", tint = if (cue.bookmarked) Coral else MutedInk)
                             }
                         }
                     }
@@ -543,19 +556,52 @@ private fun SegmentPickerDialog(
     onSelect: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit
 ) {
-    val initial = state.segmentIndex.coerceIn(0, (state.segments.size - 1).coerceAtLeast(0))
+    var bookmarkedOnly by remember { mutableStateOf(false) }
+    val rows = state.segments.mapIndexedNotNull { index, segment ->
+        val cues = state.subtitles.filter { cue ->
+            cue.startMs < segment.endMs && cue.endMs > segment.startMs
+        }
+        SegmentPickerRow(index, segment, cues).takeIf { !bookmarkedOnly || cues.any { it.bookmarked } }
+    }
+    val initial = rows.indexOfFirst { it.index == state.segmentIndex }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(bookmarkedOnly) {
+        val target = rows.indexOfFirst { it.index == state.segmentIndex }.coerceAtLeast(0)
+        if (rows.isNotEmpty()) listState.scrollToItem(target.coerceAtMost(rows.lastIndex))
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = CardShape,
         title = { Text("跳转到指定片段", fontWeight = FontWeight.Black) },
         text = {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                itemsIndexed(state.segments) { index, segment ->
-                    val selected = index == state.segmentIndex
-                    val segmentCues = state.subtitles.filter { cue ->
-                        cue.startMs < segment.endMs && cue.endMs > segment.startMs
+            Column {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !bookmarkedOnly,
+                        onClick = { bookmarkedOnly = false },
+                        label = { Text("全部片段") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = bookmarkedOnly,
+                        onClick = { bookmarkedOnly = true },
+                        label = { Text("仅看书签") },
+                        leadingIcon = { RoundedGlyph(RoundedGlyphKind.BOOKMARK, size = 16.dp, tint = if (bookmarkedOnly) Purple else MutedInk) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rows.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        Text("当前音频还没有字幕书签", color = MutedInk)
                     }
+                } else Row(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                    LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                items(rows, key = { it.index }) { row ->
+                    val index = row.index
+                    val segment = row.segment
+                    val selected = index == state.segmentIndex
+                    val segmentCues = row.cues
                     val allBookmarked = segmentCues.isNotEmpty() && segmentCues.all { it.bookmarked }
                     Row(
                         Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
@@ -572,17 +618,52 @@ private fun SegmentPickerDialog(
                             IconButton(onClick = { onToggleBookmarks(segmentCues.map { it.cueId }) }) {
                                 RoundedGlyph(
                                     RoundedGlyphKind.BOOKMARK,
-                                    contentDescription = if (allBookmarked) "取消第 ${index + 1} 段书签" else "收藏第 ${index + 1} 段",
+                                    contentDescription = if (allBookmarked) "取消第 ${index + 1} 段书签" else "为第 ${index + 1} 段添加书签",
                                     tint = if (allBookmarked) Coral else MutedInk
                                 )
                             }
                         }
                     }
                 }
+                    }
+                    FastScrollBar(
+                        itemCount = rows.size,
+                        firstVisibleItem = listState.firstVisibleItemIndex,
+                        onScrollToItem = { scope.launch { listState.scrollToItem(it) } }
+                    )
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
+}
+
+@Composable
+private fun FastScrollBar(itemCount: Int, firstVisibleItem: Int, onScrollToItem: (Int) -> Unit) {
+    var heightPx by remember { mutableIntStateOf(1) }
+    val thumbHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+    val maxIndex = (itemCount - 1).coerceAtLeast(0)
+    val travelPx = (heightPx - thumbHeightPx).coerceAtLeast(0)
+    val thumbY = if (maxIndex == 0) 0 else (travelPx * firstVisibleItem.toFloat() / maxIndex).toInt()
+    fun indexFor(y: Float): Int = if (travelPx == 0) 0 else
+        ((y - thumbHeightPx / 2f).coerceIn(0f, travelPx.toFloat()) / travelPx * maxIndex).toInt()
+
+    Box(
+        Modifier.width(24.dp).fillMaxHeight().semantics { contentDescription = "片段快速滚动条" }
+            .onSizeChanged { heightPx = it.height }
+            .pointerInput(itemCount, heightPx) {
+                detectDragGestures(
+                    onDragStart = { onScrollToItem(indexFor(it.y)) },
+                    onDrag = { change, _ -> onScrollToItem(indexFor(change.position.y)) }
+                )
+            }
+    ) {
+        Box(Modifier.align(Alignment.Center).width(4.dp).fillMaxHeight().background(PurpleLight, CircleShape))
+        Box(
+            Modifier.align(Alignment.TopCenter).offset { IntOffset(0, thumbY) }
+                .size(width = 10.dp, height = 48.dp).background(Purple, CircleShape)
+        )
+    }
 }
 
 @Composable
@@ -698,7 +779,7 @@ private fun SettingsScreen(
                     listOf(
                         "播放完整时间线" to SubtitlePlaybackScope.FULL_TIMELINE,
                         "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY,
-                        "仅播放收藏字幕" to SubtitlePlaybackScope.BOOKMARKED_CUES
+                        "仅播放书签字幕" to SubtitlePlaybackScope.BOOKMARKED_CUES
                     ),
                     value.subtitlePlaybackScope,
                     enabled
@@ -747,7 +828,7 @@ private fun SettingsScreen(
         item { SettingCard("每段重复", RoundedGlyphKind.REPEAT, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
         item { SettingCard("分段间隔", RoundedGlyphKind.GAP, Color(0xFF287EBC), SkyLight, hint = "仅在同一片段的多次重复之间保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
         item { SettingCard("播放速度", RoundedGlyphKind.SPEED, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
-        item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
+        item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "单曲循环" to PlaylistMode.LOOP_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
         item { SettingCard("定时到点", RoundedGlyphKind.BEDTIME, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
     }
 }

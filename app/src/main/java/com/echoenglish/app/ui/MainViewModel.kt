@@ -13,6 +13,7 @@ import com.echoenglish.app.EchoEnglishApp
 import com.echoenglish.app.data.LibraryRepository
 import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.model.PlaybackSettings
+import com.echoenglish.app.model.PlaybackSettingsChangePolicy
 import com.echoenglish.app.model.PlaylistMode
 import com.echoenglish.app.model.Segment
 import com.echoenglish.app.model.SegmentMode
@@ -64,6 +65,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var bookmarkedCueIds: Set<Int> = emptySet()
     private val subtitleOffsetWriteMutex = Mutex()
     private val playbackCommandMutex = Mutex()
+    private val trackStateMutex = Mutex()
     private var completionHandled = false
     private var sleepTimerStopHandled = false
     private var lastPlaybackError = ""
@@ -232,7 +234,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutableStartupRestoredTrackId.value = track.id
     }
 
-    private suspend fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean {
+    private suspend fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean =
+        trackStateMutex.withLock {
         originalCues = readCues(track)
         bookmarkedCueIds = dao.getBookmarkedCueIds(track.id)
         currentSubtitleOffsetMs = SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)
@@ -251,14 +254,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableMessage.value = when {
                 track.durationMs <= 0L -> "无法读取这条音频的时长，请重新导入或更换音频文件"
                 activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES && bookmarkedCueIds.isEmpty() ->
-                    "还没有收藏字幕，请先收藏字幕，或改为播放全部字幕片段"
+                    "还没有字幕书签，请先添加书签，或改为播放全部字幕片段"
                 activeSettings.segmentMode == SegmentMode.SUBTITLE ->
                     "没有找到可播放的字幕，请检查字幕文件，或改用固定时长分段"
                 else -> "没有生成可播放片段，请尝试调整分段方式或分段时长"
             }
-            return false
+            return@withLock false
         }
-        return true
+        true
     }
 
     private fun sendTrackLoad(
@@ -325,6 +328,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val track = mutableCurrent.value ?: return
         if (currentCues.none { it.index == cueId }) return
         viewModelScope.launch {
+            trackStateMutex.withLock {
+            if (mutableCurrent.value?.id != track.id || currentCues.none { it.index == cueId }) return@withLock
             val bookmarked = cueId !in bookmarkedCueIds
             dao.setCueBookmarked(track.id, cueId, bookmarked)
             bookmarkedCueIds = if (bookmarked) {
@@ -355,7 +360,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 })
             }
-            mutableMessage.value = if (bookmarked) "已收藏当前字幕" else "已取消收藏"
+            mutableMessage.value = if (bookmarked) "已添加当前字幕书签" else "已取消当前字幕书签"
+            }
         }
     }
 
@@ -364,6 +370,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val validIds = cueIds.toSet().filterTo(mutableSetOf()) { id -> currentCues.any { it.index == id } }
         if (validIds.isEmpty()) return
         viewModelScope.launch {
+            trackStateMutex.withLock {
+            if (mutableCurrent.value?.id != track.id) return@withLock
             val shouldBookmark = !validIds.all { it in bookmarkedCueIds }
             validIds.forEach { dao.setCueBookmarked(track.id, it, shouldBookmark) }
             bookmarkedCueIds = if (shouldBookmark) bookmarkedCueIds + validIds else bookmarkedCueIds - validIds
@@ -383,7 +391,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     action = PlaybackContract.ACTION_UPDATE_BOOKMARKS
                     putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
                 })
-                mutableMessage.value = if (shouldBookmark) "已收藏这个片段的字幕" else "已取消这个片段的字幕书签"
+                mutableMessage.value = if (shouldBookmark) "已添加这个片段的字幕书签" else "已取消这个片段的字幕书签"
+            }
             }
         }
     }
@@ -530,26 +539,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateSettings(value: PlaybackSettings) {
+        val previous = mutableSettings.value
         val currentTrack = mutableCurrent.value
-        if (value.segmentMode == SegmentMode.SUBTITLE && currentTrack != null &&
-            Segmenter.cueOnly(currentCues, currentTrack.durationMs).isEmpty()
-        ) {
-            mutableMessage.value = if (value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE) {
-                "当前音频没有匹配的有效字幕，无法只播放字幕片段"
-            } else {
-                "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
+        val segmentationChanged = PlaybackSettingsChangePolicy.requiresCurrentTrackValidation(
+            previous,
+            value
+        )
+        if (segmentationChanged && currentTrack != null) {
+            viewModelScope.launch {
+                trackStateMutex.withLock {
+                    if (mutableCurrent.value?.id != currentTrack.id) return@withLock
+                    if (value.segmentMode == SegmentMode.SUBTITLE &&
+                        Segmenter.cueOnly(currentCues, currentTrack.durationMs).isEmpty()
+                    ) {
+                        mutableMessage.value = if (value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE) {
+                            "当前音频没有匹配的有效字幕，无法只播放字幕片段"
+                        } else {
+                            "当前音频没有匹配的有效字幕，无法切换为按字幕分段"
+                        }
+                        return@withLock
+                    }
+                    if (value.segmentMode == SegmentMode.SUBTITLE &&
+                        value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES
+                    ) {
+                        bookmarkedCueIds = dao.getBookmarkedCueIds(currentTrack.id)
+                        if (bookmarkedCueIds.isEmpty()) {
+                            mutableMessage.value = "当前音频还没有字幕书签，请先在播放页添加书签"
+                            return@withLock
+                        }
+                    }
+                    applySettings(value, previous)
+                }
             }
             return
         }
-        if (
-            value.segmentMode == SegmentMode.SUBTITLE &&
-            value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES &&
-            bookmarkedCueIds.isEmpty()
-        ) {
-            mutableMessage.value = "当前音频还没有收藏字幕，请先在播放页添加书签"
-            return
-        }
-        val previous = mutableSettings.value
+        applySettings(value, previous)
+    }
+
+    private fun applySettings(value: PlaybackSettings, previous: PlaybackSettings) {
         mutableSettings.value = value
         viewModelScope.launch {
             app.settingsRepository.save(value)
@@ -690,8 +717,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableMessage.value = "当前音频没有匹配字幕，无法调整字幕时间"
             return
         }
+        viewModelScope.launch {
+        trackStateMutex.withLock {
+        if (mutableCurrent.value?.id != track.id) return@withLock
         val normalizedOffsetMs = SubtitleTiming.normalizedOffsetMs(requestedOffsetMs)
-        if (normalizedOffsetMs == currentSubtitleOffsetMs) return
+        if (normalizedOffsetMs == currentSubtitleOffsetMs) return@withLock
 
         val state = playback.value
         val previousCues = currentCues
@@ -711,17 +741,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         val updatedTrack = track.copy(subtitleOffsetMs = currentSubtitleOffsetMs)
         mutableCurrent.value = updatedTrack
-        viewModelScope.launch {
-            subtitleOffsetWriteMutex.withLock {
-                dao.updateSubtitleOffset(updatedTrack.id, updatedTrack.subtitleOffsetMs)
-            }
+        subtitleOffsetWriteMutex.withLock {
+            dao.updateSubtitleOffset(updatedTrack.id, updatedTrack.subtitleOffsetMs)
         }
 
         val activeSettings = mutableSettings.value
         currentSegments = buildSegments(activeSettings, track.durationMs)
         if (currentSegments.isEmpty()) {
             mutableMessage.value = "字幕校准后无法生成有效播放片段"
-            return
+            return@withLock
         }
 
         val targetPosition = if (activeSettings.segmentMode == SegmentMode.SUBTITLE) {
@@ -779,6 +807,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             currentSubtitleOffsetMs < 0 -> "字幕已提前 $offsetLabel"
             currentSubtitleOffsetMs > 0 -> "字幕已延后 $offsetLabel"
             else -> "字幕时间已恢复为不调整"
+        }
+        }
         }
     }
 
