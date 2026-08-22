@@ -248,7 +248,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         currentSegments = buildSegments(activeSettings, track.durationMs)
         if (currentSegments.isEmpty()) {
-            mutableMessage.value = "无法生成播放片段，请检查音频时长或字幕"
+            mutableMessage.value = when {
+                track.durationMs <= 0L -> "无法读取这条音频的时长，请重新导入或更换音频文件"
+                activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES && bookmarkedCueIds.isEmpty() ->
+                    "还没有收藏字幕，请先收藏字幕，或改为播放全部字幕片段"
+                activeSettings.segmentMode == SegmentMode.SUBTITLE ->
+                    "没有找到可播放的字幕，请检查字幕文件，或改用固定时长分段"
+                else -> "没有生成可播放片段，请尝试调整分段方式或分段时长"
+            }
             return false
         }
         return true
@@ -349,6 +356,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 })
             }
             mutableMessage.value = if (bookmarked) "已收藏当前字幕" else "已取消收藏"
+        }
+    }
+
+    fun toggleBookmarks(cueIds: List<Int>) {
+        val track = mutableCurrent.value ?: return
+        val validIds = cueIds.toSet().filterTo(mutableSetOf()) { id -> currentCues.any { it.index == id } }
+        if (validIds.isEmpty()) return
+        viewModelScope.launch {
+            val shouldBookmark = !validIds.all { it in bookmarkedCueIds }
+            validIds.forEach { dao.setCueBookmarked(track.id, it, shouldBookmark) }
+            bookmarkedCueIds = if (shouldBookmark) bookmarkedCueIds + validIds else bookmarkedCueIds - validIds
+            val activeSettings = mutableSettings.value
+            if (activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
+                if (bookmarkedCueIds.isEmpty()) {
+                    val fallback = activeSettings.copy(subtitlePlaybackScope = SubtitlePlaybackScope.CUES_ONLY)
+                    mutableSettings.value = fallback
+                    app.settingsRepository.save(fallback)
+                    mutableMessage.value = "已取消最后一个书签，播放范围已切回全部字幕片段"
+                    rebuildActiveSegments(fallback)
+                } else {
+                    rebuildActiveSegments(activeSettings)
+                }
+            } else {
+                sendService(Intent(app, PlaybackService::class.java).apply {
+                    action = PlaybackContract.ACTION_UPDATE_BOOKMARKS
+                    putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
+                })
+                mutableMessage.value = if (shouldBookmark) "已收藏这个片段的字幕" else "已取消这个片段的字幕书签"
+            }
         }
     }
 

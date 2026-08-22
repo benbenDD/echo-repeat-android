@@ -227,7 +227,8 @@ class PlaybackService : MediaSessionService() {
         Log.i(TAG, "MediaSession registered added=${isSessionAdded(session)}")
 
         val prefs = getSharedPreferences("sleep_timer", MODE_PRIVATE)
-        sleepDeadline = prefs.getLong("deadline", 0L).takeIf { it > System.currentTimeMillis() } ?: 0L
+        // Keep an expired persisted deadline so a recreated service handles it on its first tick.
+        sleepDeadline = prefs.getLong("deadline", 0L)
         stopAtSegmentEnd = prefs.getBoolean("stop_at_end", true)
         handler.post(ticker)
         activeInstance = this
@@ -765,7 +766,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun handleSleepTimer() {
         if (sleepDeadline <= 0 || System.currentTimeMillis() < sleepDeadline) return
-        if (!stopAtSegmentEnd || isInSegmentGap) {
+        if (SleepTimerExpiryPolicy.action(stopAtSegmentEnd, isInSegmentGap) == SleepTimerExpiryAction.STOP_NOW) {
             stopForSleepTimer()
             return
         }

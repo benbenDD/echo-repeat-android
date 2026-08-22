@@ -21,7 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.rounded.List
@@ -190,6 +190,7 @@ private fun EchoEnglishUi(
                     onSeekAbsolute = vm::seekAbsolute,
                     onSeekSegment = vm::seekToSegment,
                     onToggleBookmark = vm::toggleBookmark,
+                    onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = Screen.LIBRARY }
                 )
@@ -295,6 +296,8 @@ private fun LibraryScreen(
 
 @Composable
 private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val hasSubtitle = track.subtitleUri != null
     val badgeColor = if (hasSubtitle) MintLight else CoralLight
     val badgeInk = if (hasSubtitle) Mint else Coral
@@ -311,15 +314,35 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
             }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, fontWeight = FontWeight.Black, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.title, fontWeight = FontWeight.Black, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 20.sp)
                 Spacer(Modifier.height(3.dp))
                 Text("${formatTime(track.durationMs)} · ${if (hasSubtitle) "字幕已匹配" else "固定时长分段"}", color = MutedInk, fontSize = 13.sp)
                 if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            IconButton(onClick = onDelete, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
-                Icon(Icons.Rounded.Delete, contentDescription = "移除 ${track.title}")
+            Box {
+                IconButton(onClick = { showMenu = true }, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
+                    Icon(Icons.Rounded.MoreVert, contentDescription = "${track.title} 的更多操作")
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("从播放列表移除", color = Coral, fontWeight = FontWeight.Bold) },
+                        onClick = { showMenu = false; confirmDelete = true }
+                    )
+                }
             }
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            shape = CardShape,
+            title = { Text("确认移除音频？", fontWeight = FontWeight.Black) },
+            text = { Text("“${track.title}”将从播放列表中移除。手机中的原音频和字幕文件不会被删除。") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("确认移除", color = Coral, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
+        )
     }
 }
 
@@ -331,6 +354,7 @@ private fun PlayerScreen(
     onSeekAbsolute: (Long) -> Unit,
     onSeekSegment: (Int) -> Unit,
     onToggleBookmark: (Int) -> Unit,
+    onToggleBookmarks: (List<Int>) -> Unit,
     onTimer: (Int) -> Unit,
     onLibrary: () -> Unit
 ) {
@@ -421,7 +445,7 @@ private fun PlayerScreen(
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
-    if (showSegments) SegmentPickerDialog(state, { showSegments = false }) { onSeekSegment(it); showSegments = false }
+    if (showSegments) SegmentPickerDialog(state, { showSegments = false }, onSeekSegment, onToggleBookmarks)
 }
 
 @Composable
@@ -513,7 +537,12 @@ private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText:
 }
 
 @Composable
-private fun SegmentPickerDialog(state: PlaybackSnapshot, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
+private fun SegmentPickerDialog(
+    state: PlaybackSnapshot,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit,
+    onToggleBookmarks: (List<Int>) -> Unit
+) {
     val initial = state.segmentIndex.coerceIn(0, (state.segments.size - 1).coerceAtLeast(0))
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
     AlertDialog(
@@ -524,13 +553,30 @@ private fun SegmentPickerDialog(state: PlaybackSnapshot, onDismiss: () -> Unit, 
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 itemsIndexed(state.segments) { index, segment ->
                     val selected = index == state.segmentIndex
-                    Column(
+                    val segmentCues = state.subtitles.filter { cue ->
+                        cue.startMs < segment.endMs && cue.endMs > segment.startMs
+                    }
+                    val allBookmarked = segmentCues.isNotEmpty() && segmentCues.all { it.bookmarked }
+                    Row(
                         Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
                             .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
-                            .clickable { onSelect(index) }.padding(12.dp)
+                            .clickable { onSelect(index); onDismiss() }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("第 ${index + 1} 段 · ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
-                        if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+                        Column(Modifier.weight(1f)) {
+                            Text("第 ${index + 1} 段 · ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
+                            if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+                            if (segmentCues.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
+                        }
+                        if (segmentCues.isNotEmpty()) {
+                            IconButton(onClick = { onToggleBookmarks(segmentCues.map { it.cueId }) }) {
+                                RoundedGlyph(
+                                    RoundedGlyphKind.BOOKMARK,
+                                    contentDescription = if (allBookmarked) "取消第 ${index + 1} 段书签" else "收藏第 ${index + 1} 段",
+                                    tint = if (allBookmarked) Coral else MutedInk
+                                )
+                            }
+                        }
                     }
                 }
             }
