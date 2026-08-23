@@ -13,11 +13,13 @@ object PlaybackServicePolicy {
     fun mayAutomateBoundary(stopReason: PlaybackStopReason): Boolean =
         stopReason != PlaybackStopReason.SLEEP_TIMER
 
-    fun shouldRetainForegroundDuringAutomation(
+    fun shouldRunInForeground(
         startInForegroundRequired: Boolean,
         playbackTaskActive: Boolean,
         completed: Boolean,
-        hasSource: Boolean
+        hasSource: Boolean,
+        playlistHandoffActive: Boolean
     ): Boolean =
-        !startInForegroundRequired && playbackTaskActive && !completed && hasSource
+        startInForegroundRequired ||
+            (hasSource && ((playbackTaskActive && !completed) || playlistHandoffActive))
 }

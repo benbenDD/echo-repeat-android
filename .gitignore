@@ -5,7 +5,7 @@ local.properties
 **/build/
 *.iml
 captures/
-outputs/*.apk
+outputs/
 
 work/
 app/echo-debug.keystore

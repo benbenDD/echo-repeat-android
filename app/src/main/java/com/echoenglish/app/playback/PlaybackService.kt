@@ -48,6 +48,7 @@ class PlaybackService : MediaSessionService() {
     private val persistenceMutex = Mutex()
     private lateinit var app: EchoEnglishApp
     private lateinit var playbackSessionStore: PlaybackSessionStore
+    private lateinit var diagnostics: PlaybackDiagnostics
     private var lastSessionSavedAtMs = 0L
     private var lastDatabaseSavedAtMs = 0L
 
@@ -91,6 +92,8 @@ class PlaybackService : MediaSessionService() {
     private var stopReason = PlaybackStopReason.NONE
     private var playbackError = ""
     private var playbackTaskActive = false
+    private var playlistHandoffDeadlineElapsedMs = 0L
+    private val playlistHandoffExpiryRunnable = Runnable { expirePlaylistHandoff() }
 
     private var scheduleGeneration = 0L
     private var boundaryMessage: PlayerMessage? = null
@@ -121,6 +124,8 @@ class PlaybackService : MediaSessionService() {
         Log.i(TAG, "PlaybackService created")
         app = application as EchoEnglishApp
         playbackSessionStore = app.playbackSessionStore
+        diagnostics = PlaybackDiagnostics(this, persistenceScope)
+        diagnostics.record("service_created")
         gapWakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:segment-gap")
             .apply { setReferenceCounted(false) }
@@ -142,6 +147,11 @@ class PlaybackService : MediaSessionService() {
                 addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         Log.i(TAG, "isPlaying=$isPlaying state=$playbackState phase=${phaseName()}")
+                        diagnostics.record(
+                            "is_playing_changed value=$isPlaying state=$playbackState " +
+                                "playWhenReady=${player.playWhenReady} phase=${phaseName()} " +
+                                "segment=$segmentIndex repeat=$repeatIndex"
+                        )
                         if (isPlaying) {
                             logCompletedRepeatTransition()
                             armBoundary()
@@ -151,6 +161,10 @@ class PlaybackService : MediaSessionService() {
 
                     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                         Log.i(TAG, "playWhenReady=$playWhenReady reason=$reason phase=${phaseName()}")
+                        diagnostics.record(
+                            "play_when_ready value=$playWhenReady reason=$reason phase=${phaseName()} " +
+                                "timerDeadline=$sleepDeadline"
+                        )
                         publish()
                     }
 
@@ -204,9 +218,11 @@ class PlaybackService : MediaSessionService() {
 
                     override fun onPlayerError(error: PlaybackException) {
                         cancelAutomatedWork(clearGap = true)
+                        cancelPlaylistHandoff()
                         playbackTaskActive = false
                         playbackError = "播放中断：${error.errorCodeName}"
                         Log.e(TAG, playbackError, error)
+                        diagnostics.record("player_error code=${error.errorCodeName} message=${error.message}")
                         publish()
                     }
                 })
@@ -242,23 +258,29 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
-        val keepForegroundForAutomation =
-            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+        val playlistHandoffActive = isPlaylistHandoffActive()
+        val runInForeground =
+            PlaybackServicePolicy.shouldRunInForeground(
                 startInForegroundRequired = startInForegroundRequired,
                 playbackTaskActive = playbackTaskActive,
                 completed = completed,
-                hasSource = sourceUri != null
+                hasSource = sourceUri != null,
+                playlistHandoffActive = playlistHandoffActive
             )
         Log.i(
             TAG,
             "onUpdateNotification foregroundRequired=$startInForegroundRequired " +
-                "effectivePlaying=${effectiveIsPlaying()} phase=${phaseName()} hold=$keepForegroundForAutomation"
+                "effectivePlaying=${effectiveIsPlaying()} phase=${phaseName()} foreground=$runInForeground " +
+                "handoff=$playlistHandoffActive"
         )
-        if (keepForegroundForAutomation) {
-            Log.i(TAG, "foreground notification retained during automated playback")
-            return
-        }
-        super.onUpdateNotification(session, startInForegroundRequired)
+        diagnostics.record(
+            "notification requested=$startInForegroundRequired foreground=$runInForeground " +
+                "taskActive=$playbackTaskActive phase=${phaseName()} hasSource=${sourceUri != null} " +
+                "handoff=$playlistHandoffActive"
+        )
+        // Passing true actively promotes the service again if a transient player state caused
+        // Media3 or an OEM power manager to downgrade it during a repeat/segment transition.
+        super.onUpdateNotification(session, runInForeground)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action ?: "null"} startId=$startId")
@@ -268,6 +290,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun handleCommand(intent: Intent) {
         Log.i(TAG, "handleCommand action=${intent.action ?: "null"}")
+        diagnostics.record("command action=${intent.action ?: "null"} phase=${phaseName()}")
         when (intent.action) {
             PlaybackContract.ACTION_LOAD -> load(intent)
             PlaybackContract.ACTION_TOGGLE -> togglePlayback()
@@ -351,6 +374,7 @@ class PlaybackService : MediaSessionService() {
             return
         }
         cancelAutomatedWork(clearGap = true)
+        cancelPlaylistHandoff()
         playbackError = ""
         sourceUri = uri
         knownDurationMs = intent.getLongExtra(
@@ -777,6 +801,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun stopForSleepTimer() {
+        cancelPlaylistHandoff()
         playbackTaskActive = false
         pendingSleepStop = false
         completed = false
@@ -784,7 +809,38 @@ class PlaybackService : MediaSessionService() {
         cancelAutomatedWork(clearGap = true)
         player.pause()
         Log.i(TAG, "sleep timer stopped playback without completing track")
+        diagnostics.record("sleep_timer_stop deadline=$sleepDeadline stopAtSegmentEnd=$stopAtSegmentEnd")
         clearTimer(preserveStopReason = true)
+    }
+
+    private fun beginPlaylistHandoff() {
+        playlistHandoffDeadlineElapsedMs =
+            SystemClock.elapsedRealtime() + PLAYLIST_HANDOFF_GRACE_MS
+        handler.removeCallbacks(playlistHandoffExpiryRunnable)
+        handler.postDelayed(playlistHandoffExpiryRunnable, PLAYLIST_HANDOFF_GRACE_MS)
+        diagnostics.record("playlist_handoff_started graceMs=$PLAYLIST_HANDOFF_GRACE_MS")
+    }
+
+    private fun cancelPlaylistHandoff() {
+        if (playlistHandoffDeadlineElapsedMs == 0L) return
+        playlistHandoffDeadlineElapsedMs = 0L
+        handler.removeCallbacks(playlistHandoffExpiryRunnable)
+        diagnostics.record("playlist_handoff_cancelled phase=${phaseName()}")
+    }
+
+    private fun isPlaylistHandoffActive(): Boolean =
+        playlistHandoffDeadlineElapsedMs > SystemClock.elapsedRealtime() &&
+            completed &&
+            stopReason == PlaybackStopReason.TRACK_COMPLETED
+
+    private fun expirePlaylistHandoff() {
+        if (playlistHandoffDeadlineElapsedMs == 0L) return
+        if (SystemClock.elapsedRealtime() < playlistHandoffDeadlineElapsedMs) return
+        playlistHandoffDeadlineElapsedMs = 0L
+        diagnostics.record("playlist_handoff_expired phase=${phaseName()} taskActive=$playbackTaskActive")
+        if (completed && !playbackTaskActive && ::session.isInitialized) {
+            super.onUpdateNotification(session, false)
+        }
     }
 
     private fun cancelBoundary() {
@@ -1023,6 +1079,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun completeTrack() {
+        beginPlaylistHandoff()
         playbackTaskActive = false
         cancelAutomatedWork(clearGap = true)
         completed = true
@@ -1095,6 +1152,7 @@ class PlaybackService : MediaSessionService() {
             playbackTaskActive = false
             player.pause()
         } else if (completed || player.playbackState == Player.STATE_ENDED) {
+            cancelPlaylistHandoff()
             repeatIndex = 1
             completed = false
             stopReason = PlaybackStopReason.NONE
@@ -1110,6 +1168,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePlayRequest() {
+        cancelPlaylistHandoff()
         playbackTaskActive = true
         stopReason = PlaybackStopReason.NONE
         if (isInSegmentGap) {
@@ -1126,6 +1185,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePauseRequest() {
+        cancelPlaylistHandoff()
         playbackTaskActive = false
         if (isInSegmentGap) pauseGap() else player.pause()
         publish()
@@ -1375,6 +1435,9 @@ class PlaybackService : MediaSessionService() {
             TAG,
             "onTaskRemoved effectivePlaying=${effectiveIsPlaying()} mediaItems=${player.mediaItemCount} keep=$keepService"
         )
+        diagnostics.record(
+            "task_removed effectivePlaying=${effectiveIsPlaying()} mediaItems=${player.mediaItemCount} keep=$keepService"
+        )
         if (!keepService) stopSelf()
     }
 
@@ -1384,6 +1447,12 @@ class PlaybackService : MediaSessionService() {
             "PlaybackService destroyed effectivePlaying=${effectiveIsPlaying()} " +
                 "state=${player.playbackState} gapWakeHeld=${gapWakeLock.isHeld}"
         )
+        if (::diagnostics.isInitialized) {
+            diagnostics.record(
+                "service_destroyed effectivePlaying=${effectiveIsPlaying()} state=${player.playbackState} " +
+                    "phase=${phaseName()} taskActive=$playbackTaskActive"
+            )
+        }
         persistPlaybackSession(force = true, persistDatabase = false)
         handler.removeCallbacksAndMessages(null)
         if (activeInstance === this) {
@@ -1429,6 +1498,7 @@ class PlaybackService : MediaSessionService() {
             activeInstance != null && activeSourceMediaId == mediaId
 
         private const val TICK_MS = 80L
+        private const val PLAYLIST_HANDOFF_GRACE_MS = 15_000L
         private const val ADJACENT_TOLERANCE_MS = 2L
         private const val MAX_GAP_WAKE_LOCK_MS = 10_000L
     }
