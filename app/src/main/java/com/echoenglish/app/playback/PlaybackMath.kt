@@ -36,4 +36,26 @@ object PlaybackMath {
         if (starts.isEmpty()) return -1
         return starts.indices.lastOrNull { starts[it] <= positionMs } ?: -1
     }
+
+    fun subtitleIndexForPlayback(
+        starts: LongArray,
+        ends: LongArray,
+        positionMs: Long,
+        segmentStartMs: Long,
+        segmentEndMs: Long,
+        preferSegmentCueDuringLeadIn: Boolean
+    ): Int {
+        if (starts.isEmpty()) return -1
+        val timelineIndex = subtitleIndexAt(starts, positionMs)
+        if (!preferSegmentCueDuringLeadIn) return timelineIndex
+
+        val upcomingSegmentCue = starts.indices.firstOrNull { index ->
+            starts[index] < segmentEndMs &&
+                ends.getOrElse(index) { starts[index] } > segmentStartMs
+        }
+        return if (
+            upcomingSegmentCue != null &&
+            positionMs < starts[upcomingSegmentCue]
+        ) upcomingSegmentCue else timelineIndex
+    }
 }

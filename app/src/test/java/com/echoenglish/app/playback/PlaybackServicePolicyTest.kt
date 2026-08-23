@@ -69,30 +69,57 @@ class PlaybackServicePolicyTest {
 
     @Test fun automatedRepeatGapRetainsExistingForegroundService() {
         assertTrue(
-            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+            PlaybackServicePolicy.shouldRunInForeground(
                 startInForegroundRequired = false,
                 playbackTaskActive = true,
                 completed = false,
-                hasSource = true
+                hasSource = true,
+                playlistHandoffActive = false
             )
         )
     }
 
     @Test fun completedOrUserPausedPlaybackMayLeaveForeground() {
         assertFalse(
-            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+            PlaybackServicePolicy.shouldRunInForeground(
                 startInForegroundRequired = false,
                 playbackTaskActive = false,
                 completed = false,
-                hasSource = true
+                hasSource = true,
+                playlistHandoffActive = false
             )
         )
         assertFalse(
-            PlaybackServicePolicy.shouldRetainForegroundDuringAutomation(
+            PlaybackServicePolicy.shouldRunInForeground(
                 startInForegroundRequired = false,
                 playbackTaskActive = true,
                 completed = true,
-                hasSource = true
+                hasSource = true,
+                playlistHandoffActive = false
+            )
+        )
+    }
+
+    @Test fun media3ForegroundRequestAlwaysPromotesService() {
+        assertTrue(
+            PlaybackServicePolicy.shouldRunInForeground(
+                startInForegroundRequired = true,
+                playbackTaskActive = false,
+                completed = false,
+                hasSource = false,
+                playlistHandoffActive = false
+            )
+        )
+    }
+
+    @Test fun naturalPlaylistHandoffRetainsForegroundService() {
+        assertTrue(
+            PlaybackServicePolicy.shouldRunInForeground(
+                startInForegroundRequired = false,
+                playbackTaskActive = false,
+                completed = true,
+                hasSource = true,
+                playlistHandoffActive = true
             )
         )
     }

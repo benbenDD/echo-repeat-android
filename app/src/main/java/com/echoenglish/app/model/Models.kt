@@ -5,8 +5,8 @@ data class Segment(val startMs: Long, val endMs: Long, val text: String = "") {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0)
 }
 enum class SegmentMode { FIXED, SUBTITLE }
-enum class SubtitlePlaybackScope { FULL_TIMELINE, CUES_ONLY }
-enum class PlaylistMode { STOP_AFTER_TRACK, SEQUENTIAL, LOOP_LIST }
+enum class SubtitlePlaybackScope { FULL_TIMELINE, CUES_ONLY, BOOKMARKED_CUES }
+enum class PlaylistMode { STOP_AFTER_TRACK, LOOP_TRACK, SEQUENTIAL, LOOP_LIST }
 data class PlaybackSettings(
     val segmentMode: SegmentMode = SegmentMode.FIXED,
     val subtitlePlaybackScope: SubtitlePlaybackScope = SubtitlePlaybackScope.FULL_TIMELINE,

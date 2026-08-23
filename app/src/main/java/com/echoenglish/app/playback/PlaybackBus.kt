@@ -4,7 +4,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class SegmentSnapshot(val startMs: Long, val endMs: Long, val text: String = "")
-data class SubtitleSnapshot(val startMs: Long, val endMs: Long, val text: String)
+data class SubtitleSnapshot(
+    val cueId: Int,
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val bookmarked: Boolean = false
+)
 
 enum class PlaybackStopReason {
     NONE,

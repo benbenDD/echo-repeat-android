@@ -33,9 +33,11 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
             sortOrder INTEGER NOT NULL,
             available INTEGER NOT NULL
         )""")
+        db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(DatabaseSchema.MIGRATION_1_TO_2)
+        if (oldVersion < 3) db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
     }
 }

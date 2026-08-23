@@ -12,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.rounded.List
@@ -38,6 +39,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,12 +55,14 @@ import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackSnapshot
+import com.echoenglish.app.playback.SubtitleSnapshot
 import com.echoenglish.app.ui.MainViewModel
 import com.echoenglish.app.ui.components.RoundedGlyph
 import com.echoenglish.app.ui.components.RoundedGlyphKind
 import com.echoenglish.app.util.SelectionLogic
 import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -78,6 +86,17 @@ private val SoftBorder = Color(0xFFE8E1DC)
 
 private val CardShape = RoundedCornerShape(22.dp)
 private val ControlShape = RoundedCornerShape(15.dp)
+
+private data class SegmentPickerRow(
+    val key: String,
+    val number: Int,
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val cueIds: List<Int>,
+    val bookmarked: Boolean,
+    val selected: Boolean
+)
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
 
@@ -138,6 +157,7 @@ private fun EchoEnglishUi(
     val settings by vm.settings.collectAsState()
     val message by vm.message.collectAsState()
     val startupRestoredTrackId by vm.startupRestoredTrackId.collectAsState()
+    val locatorSubtitles by vm.locatorSubtitles.collectAsState()
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
@@ -186,9 +206,11 @@ private fun EchoEnglishUi(
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
                     state = playback,
+                    locatorSubtitles = locatorSubtitles,
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
-                    onSeekSegment = vm::seekToSegment,
+                    onToggleBookmark = vm::toggleBookmark,
+                    onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = Screen.LIBRARY }
                 )
@@ -227,7 +249,7 @@ private fun LibraryScreen(
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("回声英语", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
+                Text("回声复读", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
                 Text("把长音频变成容易掌握的小段落", color = MutedInk, fontSize = 14.sp)
             }
             Surface(shape = CircleShape, color = YellowLight, modifier = Modifier.size(52.dp)) {
@@ -294,6 +316,8 @@ private fun LibraryScreen(
 
 @Composable
 private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val hasSubtitle = track.subtitleUri != null
     val badgeColor = if (hasSubtitle) MintLight else CoralLight
     val badgeInk = if (hasSubtitle) Mint else Coral
@@ -310,15 +334,35 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
             }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
-                Text(track.title, fontWeight = FontWeight.Black, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(track.title, fontWeight = FontWeight.Black, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 20.sp)
                 Spacer(Modifier.height(3.dp))
                 Text("${formatTime(track.durationMs)} · ${if (hasSubtitle) "字幕已匹配" else "固定时长分段"}", color = MutedInk, fontSize = 13.sp)
                 if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            IconButton(onClick = onDelete, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
-                Icon(Icons.Rounded.Delete, contentDescription = "移除 ${track.title}")
+            Box {
+                IconButton(onClick = { showMenu = true }, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
+                    Icon(Icons.Rounded.MoreVert, contentDescription = "${track.title} 的更多操作")
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("从播放列表移除", color = Coral, fontWeight = FontWeight.Bold) },
+                        onClick = { showMenu = false; confirmDelete = true }
+                    )
+                }
             }
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            shape = CardShape,
+            title = { Text("确认移除音频？", fontWeight = FontWeight.Black) },
+            text = { Text("“${track.title}”将从播放列表中移除。手机中的原音频和字幕文件不会被删除。") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("确认移除", color = Coral, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
+        )
     }
 }
 
@@ -326,9 +370,11 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
 private fun PlayerScreen(
     title: String,
     state: PlaybackSnapshot,
+    locatorSubtitles: List<SubtitleSnapshot>,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
-    onSeekSegment: (Int) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
+    onToggleBookmarks: (List<Int>) -> Unit,
     onTimer: (Int) -> Unit,
     onLibrary: () -> Unit
 ) {
@@ -358,8 +404,8 @@ private fun PlayerScreen(
                 )
             }
         }
-        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 108.dp, max = 126.dp)
-        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute)
+        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 180.dp)
+        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute, onToggleBookmark)
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             InfoPill("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段", PurpleLight, Purple)
@@ -419,11 +465,11 @@ private fun PlayerScreen(
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
-    if (showSegments) SegmentPickerDialog(state, { showSegments = false }) { onSeekSegment(it); showSegments = false }
+    if (showSegments) SegmentPickerDialog(state, locatorSubtitles, { showSegments = false }, onSeekAbsolute, onToggleBookmarks)
 }
 
 @Composable
-private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit) {
+private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit, onToggleBookmark: (Int) -> Unit) {
     val listState = rememberLazyListState()
     var userBrowsing by remember { mutableStateOf(false) }
     var autoScrolling by remember { mutableStateOf(false) }
@@ -448,6 +494,11 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (expanded) "全部字幕" else "当前字幕", Modifier.weight(1f), color = MutedInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                state.subtitles.getOrNull(state.subtitleIndex)?.let { cue ->
+                    IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
+                        RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消当前字幕书签" else "为当前字幕添加书签", tint = if (cue.bookmarked) Coral else MutedInk)
+                    }
+                }
                 if (state.subtitles.isNotEmpty()) {
                     TextButton(onClick = { onExpandedChange(!expanded) }) {
                         Text(if (expanded) "收起" else "展开字幕", color = Purple, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -472,14 +523,20 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                 LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     itemsIndexed(state.subtitles) { index, cue ->
                         val selected = index == state.subtitleIndex
-                        Column(
+                        Row(
                             Modifier.fillMaxWidth().padding(horizontal = 10.dp)
                                 .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(14.dp))
                                 .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(14.dp))
-                                .clickable { onSubtitleClick(cue.startMs) }.padding(horizontal = 14.dp, vertical = 10.dp)
+                                .clickable { onSubtitleClick(cue.startMs) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(formatTime(cue.startMs), color = if (selected) Purple else MutedInk, fontSize = 11.sp)
-                            Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            Column(Modifier.weight(1f)) {
+                                Text(formatTime(cue.startMs), color = if (selected) Purple else MutedInk, fontSize = 11.sp)
+                                Text(cue.text, color = Ink, fontSize = if (selected) 19.sp else 17.sp, lineHeight = 26.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            }
+                            IconButton(onClick = { onToggleBookmark(cue.cueId) }) {
+                                RoundedGlyph(RoundedGlyphKind.BOOKMARK, contentDescription = if (cue.bookmarked) "取消字幕书签" else "为字幕添加书签", tint = if (cue.bookmarked) Coral else MutedInk)
+                            }
                         }
                     }
                 }
@@ -500,30 +557,138 @@ private fun ProgressBlock(label: String, value: Float, maximum: Float, leftText:
 }
 
 @Composable
-private fun SegmentPickerDialog(state: PlaybackSnapshot, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
-    val initial = state.segmentIndex.coerceIn(0, (state.segments.size - 1).coerceAtLeast(0))
+private fun SegmentPickerDialog(
+    state: PlaybackSnapshot,
+    locatorSubtitles: List<SubtitleSnapshot>,
+    onDismiss: () -> Unit,
+    onSelect: (Long) -> Unit,
+    onToggleBookmarks: (List<Int>) -> Unit
+) {
+    var bookmarkedOnly by remember { mutableStateOf(false) }
+    val allRows = if (locatorSubtitles.isNotEmpty()) {
+        locatorSubtitles.mapIndexed { index, cue ->
+            SegmentPickerRow(
+                key = "cue-${cue.cueId}",
+                number = index + 1,
+                startMs = cue.startMs,
+                endMs = cue.endMs,
+                text = cue.text,
+                cueIds = listOf(cue.cueId),
+                bookmarked = cue.bookmarked,
+                selected = index == state.subtitleIndex
+            )
+        }
+    } else {
+        state.segments.mapIndexed { index, segment ->
+            SegmentPickerRow(
+                key = "segment-$index",
+                number = index + 1,
+                startMs = segment.startMs,
+                endMs = segment.endMs,
+                text = segment.text,
+                cueIds = emptyList(),
+                bookmarked = false,
+                selected = index == state.segmentIndex
+            )
+        }
+    }
+    val rows = allRows.filter { !bookmarkedOnly || it.bookmarked }
+    val initial = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(bookmarkedOnly) {
+        val target = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
+        if (rows.isNotEmpty()) listState.scrollToItem(target.coerceAtMost(rows.lastIndex))
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = CardShape,
         title = { Text("跳转到指定片段", fontWeight = FontWeight.Black) },
         text = {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                itemsIndexed(state.segments) { index, segment ->
-                    val selected = index == state.segmentIndex
-                    Column(
-                        Modifier.fillMaxWidth().background(if (selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
-                            .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
-                            .clickable { onSelect(index) }.padding(12.dp)
-                    ) {
-                        Text("第 ${index + 1} 段 · ${formatTime(segment.startMs)}–${formatTime(segment.endMs)}", color = if (selected) Purple else Ink, fontWeight = FontWeight.Bold)
-                        if (segment.text.isNotBlank()) Text(segment.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+            Column {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !bookmarkedOnly,
+                        onClick = { bookmarkedOnly = false },
+                        label = { Text(if (locatorSubtitles.isNotEmpty()) "全部字幕" else "全部片段") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = bookmarkedOnly,
+                        onClick = { bookmarkedOnly = true },
+                        label = { Text("仅看书签") },
+                        leadingIcon = { RoundedGlyph(RoundedGlyphKind.BOOKMARK, size = 16.dp, tint = if (bookmarkedOnly) Purple else MutedInk) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rows.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                        Text("当前音频还没有字幕书签", color = MutedInk)
                     }
+                } else Row(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+                    LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                items(rows, key = { it.key }) { row ->
+                    Row(
+                        Modifier.fillMaxWidth().background(if (row.selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
+                            .border(if (row.selected) 1.3.dp else 0.dp, if (row.selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
+                            .clickable { onSelect(row.startMs); onDismiss() }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("第 ${row.number} 条 · ${formatTime(row.startMs)}–${formatTime(row.endMs)}", color = if (row.selected) Purple else Ink, fontWeight = FontWeight.Bold)
+                            if (row.text.isNotBlank()) Text(row.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
+                            if (row.cueIds.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
+                        }
+                        if (row.cueIds.isNotEmpty()) {
+                            IconButton(onClick = { onToggleBookmarks(row.cueIds) }) {
+                                RoundedGlyph(
+                                    RoundedGlyphKind.BOOKMARK,
+                                    contentDescription = if (row.bookmarked) "取消第 ${row.number} 条字幕书签" else "为第 ${row.number} 条字幕添加书签",
+                                    tint = if (row.bookmarked) Coral else MutedInk
+                                )
+                            }
+                        }
+                    }
+                }
+                    }
+                    FastScrollBar(
+                        itemCount = rows.size,
+                        firstVisibleItem = listState.firstVisibleItemIndex,
+                        onScrollToItem = { scope.launch { listState.scrollToItem(it) } }
+                    )
                 }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
+}
+
+@Composable
+private fun FastScrollBar(itemCount: Int, firstVisibleItem: Int, onScrollToItem: (Int) -> Unit) {
+    var heightPx by remember { mutableIntStateOf(1) }
+    val thumbHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.roundToPx() }
+    val maxIndex = (itemCount - 1).coerceAtLeast(0)
+    val travelPx = (heightPx - thumbHeightPx).coerceAtLeast(0)
+    val thumbY = if (maxIndex == 0) 0 else (travelPx * firstVisibleItem.toFloat() / maxIndex).toInt()
+    fun indexFor(y: Float): Int = if (travelPx == 0) 0 else
+        ((y - thumbHeightPx / 2f).coerceIn(0f, travelPx.toFloat()) / travelPx * maxIndex).toInt()
+
+    Box(
+        Modifier.width(24.dp).fillMaxHeight().semantics { contentDescription = "片段快速滚动条" }
+            .onSizeChanged { heightPx = it.height }
+            .pointerInput(itemCount, heightPx) {
+                detectDragGestures(
+                    onDragStart = { onScrollToItem(indexFor(it.y)) },
+                    onDrag = { change, _ -> onScrollToItem(indexFor(change.position.y)) }
+                )
+            }
+    ) {
+        Box(Modifier.align(Alignment.Center).width(4.dp).fillMaxHeight().background(PurpleLight, CircleShape))
+        Box(
+            Modifier.align(Alignment.TopCenter).offset { IntOffset(0, thumbY) }
+                .size(width = 10.dp, height = 48.dp).background(Purple, CircleShape)
+        )
+    }
 }
 
 @Composable
@@ -638,7 +803,8 @@ private fun SettingsScreen(
                 ChoiceGrid(
                     listOf(
                         "播放完整时间线" to SubtitlePlaybackScope.FULL_TIMELINE,
-                        "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY
+                        "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY,
+                        "仅播放书签字幕" to SubtitlePlaybackScope.BOOKMARKED_CUES
                     ),
                     value.subtitlePlaybackScope,
                     enabled
@@ -647,7 +813,7 @@ private fun SettingsScreen(
         }
         if (
             value.segmentMode == SegmentMode.SUBTITLE &&
-            value.subtitlePlaybackScope == SubtitlePlaybackScope.CUES_ONLY
+            value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE
         ) {
             item {
                 SettingCard(
@@ -687,7 +853,7 @@ private fun SettingsScreen(
         item { SettingCard("每段重复", RoundedGlyphKind.REPEAT, Mint, MintLight) { ChoiceGrid(listOf("1次" to 1, "3次" to 3, "5次" to 5, "10次" to 10, "无限" to 0), value.repeatCount) { onChange(value.copy(repeatCount = it)) } } }
         item { SettingCard("分段间隔", RoundedGlyphKind.GAP, Color(0xFF287EBC), SkyLight, hint = "仅在同一片段的多次重复之间保留静音间隔") { ChoiceGrid(listOf("无间隔" to 0L, "0.5秒" to 500L, "1秒" to 1_000L, "2秒" to 2_000L, "3秒" to 3_000L, "5秒" to 5_000L), value.segmentGapMs) { onChange(value.copy(segmentGapMs = it)) } } }
         item { SettingCard("播放速度", RoundedGlyphKind.SPEED, Sky, SkyLight) { ChoiceGrid(listOf("0.75x" to .75f, "1.0x" to 1f, "1.25x" to 1.25f, "1.5x" to 1.5f, "2.0x" to 2f), value.speed) { onChange(value.copy(speed = it)) } } }
-        item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
+        item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "单曲循环" to PlaylistMode.LOOP_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
         item { SettingCard("定时到点", RoundedGlyphKind.BEDTIME, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
     }
 }
