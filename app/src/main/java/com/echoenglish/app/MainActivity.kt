@@ -28,6 +28,8 @@ import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,6 +62,7 @@ import com.echoenglish.app.ui.MainViewModel
 import com.echoenglish.app.ui.components.RoundedGlyph
 import com.echoenglish.app.ui.components.RoundedGlyphKind
 import com.echoenglish.app.util.SelectionLogic
+import com.echoenglish.app.util.SubtitleSearch
 import com.echoenglish.app.util.formatTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -565,6 +568,7 @@ private fun SegmentPickerDialog(
     onToggleBookmarks: (List<Int>) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     val allRows = if (locatorSubtitles.isNotEmpty()) {
         locatorSubtitles.mapIndexed { index, cue ->
             SegmentPickerRow(
@@ -592,11 +596,13 @@ private fun SegmentPickerDialog(
             )
         }
     }
-    val rows = allRows.filter { !bookmarkedOnly || it.bookmarked }
+    val rows = allRows.filter { row ->
+        (!bookmarkedOnly || row.bookmarked) && SubtitleSearch.matches(row.text, searchQuery)
+    }
     val initial = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
     val scope = rememberCoroutineScope()
-    LaunchedEffect(bookmarkedOnly) {
+    LaunchedEffect(bookmarkedOnly, searchQuery) {
         val target = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
         if (rows.isNotEmpty()) listState.scrollToItem(target.coerceAtMost(rows.lastIndex))
     }
@@ -606,6 +612,27 @@ private fun SegmentPickerDialog(
         title = { Text("跳转到指定片段", fontWeight = FontWeight.Black) },
         text = {
             Column {
+                if (locatorSubtitles.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        singleLine = true,
+                        label = { Text("搜索字幕") },
+                        placeholder = { Text("输入台词或关键词") },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Search, contentDescription = null, tint = Purple)
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "清空字幕搜索")
+                                }
+                            }
+                        },
+                        shape = ControlShape
+                    )
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = !bookmarkedOnly,
@@ -623,7 +650,15 @@ private fun SegmentPickerDialog(
                 }
                 if (rows.isEmpty()) {
                     Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
-                        Text("当前音频还没有字幕书签", color = MutedInk)
+                        Text(
+                            when {
+                                searchQuery.isNotBlank() && bookmarkedOnly -> "书签字幕中没有找到相关台词"
+                                searchQuery.isNotBlank() -> "没有找到相关字幕"
+                                bookmarkedOnly -> "当前音频还没有字幕书签"
+                                else -> "当前音频没有可定位的片段"
+                            },
+                            color = MutedInk
+                        )
                     }
                 } else Row(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
                     LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
