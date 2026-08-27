@@ -4,6 +4,9 @@ object PlaybackServicePolicy {
     fun requiresForegroundStart(action: String?, autoPlay: Boolean = true): Boolean =
         action == PlaybackContract.ACTION_LOAD && autoPlay
 
+    fun shouldDeferBlockedStart(action: String?): Boolean =
+        action == PlaybackContract.ACTION_LOAD
+
     fun shouldAdvancePlaylist(completed: Boolean, stopReason: PlaybackStopReason): Boolean =
         completed && stopReason == PlaybackStopReason.TRACK_COMPLETED
 

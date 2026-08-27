@@ -1,6 +1,7 @@
 package com.echoenglish.app.ui
 
 import android.app.Application
+import android.app.BackgroundServiceStartNotAllowedException
 import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Intent
 import android.net.Uri
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -74,6 +76,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var sleepTimerStopHandled = false
     private var lastPlaybackError = ""
     private var playbackConfigurationGeneration = 0L
+    private var foregroundRecoveryPending = false
 
     init {
         viewModelScope.launch {
@@ -131,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun sendService(intent: Intent): Boolean {
         if (PlaybackService.dispatchToActiveService(intent)) {
+            if (intent.action == PlaybackContract.ACTION_LOAD) foregroundRecoveryPending = false
             Log.d("EchoPlayback", "command sent to active service: " + intent.action)
             return true
         }
@@ -151,19 +155,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 app.startService(intent)
             }
+            foregroundRecoveryPending = false
             return true
         } catch (error: RuntimeException) {
             val backgroundStartBlocked =
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    error is ForegroundServiceStartNotAllowedException
+                    (error is ForegroundServiceStartNotAllowedException ||
+                        error is BackgroundServiceStartNotAllowedException)
             if (!backgroundStartBlocked) throw error
 
+            foregroundRecoveryPending =
+                PlaybackServicePolicy.shouldDeferBlockedStart(intent.action)
             Log.e(
                 "EchoPlayback",
-                "foreground service start blocked while app is backgrounded; action=" + intent.action,
+                "service start blocked while app is backgrounded; action=${intent.action} " +
+                    "exception=${error.javaClass.simpleName} deferred=$foregroundRecoveryPending",
                 error
             )
-            mutableMessage.value = "\u7cfb\u7edf\u6682\u4e0d\u5141\u8bb8\u4ece\u540e\u53f0\u542f\u52a8\u64ad\u653e\uff0c\u8bf7\u56de\u5230\u5e94\u7528\u540e\u91cd\u8bd5"
+            mutableMessage.value = "系统暂不允许从后台恢复播放，回到应用后将自动重试"
             return false
         }
     }
@@ -412,9 +421,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppForegrounded() {
         viewModelScope.launch {
+            // onResume can arrive just before Android updates the UID from background to foreground.
+            // Give the platform a brief window before starting a cold playback service.
+            delay(FOREGROUND_RECOVERY_DELAY_MS)
             playbackCommandMutex.withLock {
                 val track = mutableCurrent.value ?: return@withLock
                 if (PlaybackService.hasLoadedSource(track.id.toString())) return@withLock
+                Log.i(
+                    "EchoPlayback",
+                    "foreground recovery requested trackId=${track.id} pending=$foregroundRecoveryPending"
+                )
                 deliverPlaybackCommand(PlaybackCommandRecoveryPolicy.ACTION_FOREGROUND_RESUME)
             }
         }
@@ -888,6 +904,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = list.indexOfFirst { it.id == currentTrack.id }
         PlaylistNavigation.nextIndex(activeSettings.playlistMode, index, list.size)
             ?.let { nextIndex -> list.getOrNull(nextIndex)?.let { openTrack(it) } }
+    }
+
+    companion object {
+        private const val FOREGROUND_RECOVERY_DELAY_MS = 350L
     }
 }
 

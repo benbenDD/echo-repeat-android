@@ -5,6 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackServicePolicyTest {
+    @Test fun blockedTrackLoadIsDeferredUntilForeground() {
+        assertTrue(PlaybackServicePolicy.shouldDeferBlockedStart(PlaybackContract.ACTION_LOAD))
+        assertFalse(PlaybackServicePolicy.shouldDeferBlockedStart(PlaybackContract.ACTION_TOGGLE))
+    }
     @Test fun loadingAudioRequiresForegroundStart() {
         assertTrue(PlaybackServicePolicy.requiresForegroundStart(PlaybackContract.ACTION_LOAD))
     }
