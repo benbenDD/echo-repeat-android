@@ -107,6 +107,7 @@ class PlaybackService : MediaSessionService() {
     private var segmentGapPlaybackSpeed = 1f
     private var gapDeadlineElapsedMs = 0L
     private var pendingGapAction: SegmentBoundaryAction? = null
+    private var gapWakeLockAwaitingPlayback = false
 
     private data class BoundaryToken(
         val generation: Long,
@@ -157,6 +158,11 @@ class PlaybackService : MediaSessionService() {
                                 "segment=$segmentIndex repeat=$repeatIndex"
                         )
                         if (isPlaying) {
+                            if (gapWakeLockAwaitingPlayback) {
+                                diagnostics.record("gap playback resumed wake=${gapWakeLock.isHeld}")
+                                gapWakeLockAwaitingPlayback = false
+                                releaseGapWakeLock()
+                            }
                             logCompletedRepeatTransition()
                             armBoundary()
                         }
@@ -1080,20 +1086,19 @@ class PlaybackService : MediaSessionService() {
         segmentGapPlaybackSpeed = player.playbackParameters.speed
         gapDeadlineElapsedMs = SystemClock.elapsedRealtime() + segmentGapRemainingMs
         if (!paused) {
-            acquireGapWakeLock()
+            acquireGapWakeLock(segmentGapRemainingMs)
             scheduleGapCompletion(scheduleGeneration)
         }
-        Log.d(
-            TAG,
+        diagnostics.record(
             "gap started generation=$scheduleGeneration duration=$segmentGapRemainingMs " +
                 "action=$action followAlong=$followAlongGap paused=$paused wake=${gapWakeLock.isHeld}"
         )
         publish()
     }
 
-    private fun acquireGapWakeLock() {
+    private fun acquireGapWakeLock(durationMs: Long) {
         if (!gapWakeLock.isHeld) {
-            gapWakeLock.acquire(MAX_GAP_WAKE_LOCK_MS)
+            gapWakeLock.acquire(SegmentPlaybackPolicy.gapWakeLockTimeoutMs(durationMs))
         }
     }
 
@@ -1115,12 +1120,23 @@ class PlaybackService : MediaSessionService() {
         }
         gapRunnable = null
         val action = pendingGapAction ?: return clearGapState()
-        clearGapState()
-        executeBoundaryAction(action)
+        diagnostics.record(
+            "gap finished generation=$token plannedDuration=$segmentGapDurationMs " +
+                "lateness=${(SystemClock.elapsedRealtime() - gapDeadlineElapsedMs).coerceAtLeast(0L)} " +
+                "action=$action followAlong=$isFollowAlongGap wake=${gapWakeLock.isHeld}"
+        )
+        executeBoundaryAction(
+            action,
+            keepWakeLockUntilPlayback = action != SegmentBoundaryAction.COMPLETE
+        )
     }
 
-    private fun executeBoundaryAction(action: SegmentBoundaryAction) {
-        clearGapState()
+    private fun executeBoundaryAction(
+        action: SegmentBoundaryAction,
+        keepWakeLockUntilPlayback: Boolean = false
+    ) {
+        clearGapState(releaseWakeLock = !keepWakeLockUntilPlayback)
+        gapWakeLockAwaitingPlayback = keepWakeLockUntilPlayback
         when (action) {
             SegmentBoundaryAction.REPEAT_CURRENT -> {
                 if (repeatBoundaryDetectedElapsedMs == 0L) {
@@ -1277,10 +1293,9 @@ class PlaybackService : MediaSessionService() {
         isSegmentGapPaused = false
         playbackTaskActive = true
         val token = ++scheduleGeneration
-        acquireGapWakeLock()
+        acquireGapWakeLock(segmentGapRemainingMs)
         scheduleGapCompletion(token)
-        Log.d(
-            TAG,
+        diagnostics.record(
             "gap resumed generation=$token remaining=$segmentGapRemainingMs wake=${gapWakeLock.isHeld}"
         )
     }
@@ -1330,8 +1345,9 @@ class PlaybackService : MediaSessionService() {
         if (clearGap) clearGapState()
     }
 
-    private fun clearGapState() {
-        releaseGapWakeLock()
+    private fun clearGapState(releaseWakeLock: Boolean = true) {
+        if (releaseWakeLock) releaseGapWakeLock()
+        gapWakeLockAwaitingPlayback = false
         isInSegmentGap = false
         isSegmentGapPaused = false
         isFollowAlongGap = false
@@ -1578,6 +1594,5 @@ class PlaybackService : MediaSessionService() {
         private const val TICK_MS = 80L
         private const val PLAYLIST_HANDOFF_GRACE_MS = 15_000L
         private const val ADJACENT_TOLERANCE_MS = 2L
-        private const val MAX_GAP_WAKE_LOCK_MS = 10_000L
     }
 }

@@ -189,6 +189,15 @@ class SegmentPlaybackPolicyTest {
         assertEquals(5_000L, SegmentPlaybackPolicy.normalizedGapMs(8_000))
     }
 
+    @Test fun gapWakeLockCoversTheEntireFollowAlongWait() {
+        assertEquals(50_000L, SegmentPlaybackPolicy.gapWakeLockTimeoutMs(20_000L))
+        assertEquals(210_000L, SegmentPlaybackPolicy.gapWakeLockTimeoutMs(180_000L))
+    }
+
+    @Test fun zeroLengthGapStillGetsCompletionMargin() {
+        assertEquals(30_000L, SegmentPlaybackPolicy.gapWakeLockTimeoutMs(0L))
+    }
+
     @Test fun repeatedPlaybackAlwaysUsesIdenticalBoundaries() {
         val start = 12_345L
         val end = 18_765L

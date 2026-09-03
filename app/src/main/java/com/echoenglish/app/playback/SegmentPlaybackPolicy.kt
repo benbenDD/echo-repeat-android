@@ -4,6 +4,7 @@ enum class SegmentBoundaryAction { REPEAT_CURRENT, NEXT_SEGMENT, COMPLETE }
 
 object SegmentPlaybackPolicy {
     const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
+    private const val GAP_WAKE_LOCK_FINISH_MARGIN_MS = 30_000L
 
     fun previousTargetIndex(currentIndex: Int, positionInSegmentMs: Long): Int =
         if (positionInSegmentMs > PREVIOUS_RESTART_THRESHOLD_MS) {
@@ -123,4 +124,7 @@ object SegmentPlaybackPolicy {
         }
 
     fun normalizedGapMs(value: Long): Long = value.coerceIn(0L, 5_000L)
+
+    fun gapWakeLockTimeoutMs(gapDurationMs: Long): Long =
+        gapDurationMs.coerceAtLeast(0L) + GAP_WAKE_LOCK_FINISH_MARGIN_MS
 }
