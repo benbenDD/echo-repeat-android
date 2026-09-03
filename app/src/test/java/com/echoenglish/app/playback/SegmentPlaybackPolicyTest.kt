@@ -132,6 +132,52 @@ class SegmentPlaybackPolicyTest {
         )
     }
 
+    @Test fun followAlongSubtitleReplaysTheSegmentTimelineAtNormalSpeed() {
+        assertEquals(
+            10_000L,
+            SegmentPlaybackPolicy.followAlongSubtitlePositionMs(
+                segmentStartMs = 10_000L,
+                segmentEndMs = 18_000L,
+                gapDurationMs = 8_000L,
+                gapRemainingMs = 8_000L,
+                playbackSpeed = 1f
+            )
+        )
+        assertEquals(
+            14_000L,
+            SegmentPlaybackPolicy.followAlongSubtitlePositionMs(
+                segmentStartMs = 10_000L,
+                segmentEndMs = 18_000L,
+                gapDurationMs = 8_000L,
+                gapRemainingMs = 4_000L,
+                playbackSpeed = 1f
+            )
+        )
+    }
+
+    @Test fun followAlongSubtitleTimelineUsesThePlaybackSpeedFromGapStart() {
+        assertEquals(
+            14_000L,
+            SegmentPlaybackPolicy.followAlongSubtitlePositionMs(
+                segmentStartMs = 10_000L,
+                segmentEndMs = 18_000L,
+                gapDurationMs = 4_000L,
+                gapRemainingMs = 2_000L,
+                playbackSpeed = 2f
+            )
+        )
+        assertEquals(
+            17_999L,
+            SegmentPlaybackPolicy.followAlongSubtitlePositionMs(
+                segmentStartMs = 10_000L,
+                segmentEndMs = 18_000L,
+                gapDurationMs = 4_000L,
+                gapRemainingMs = 0L,
+                playbackSpeed = 2f
+            )
+        )
+    }
+
     @Test fun supportedGapValuesArePreserved() {
         listOf(0L, 500L, 1_000L, 2_000L, 3_000L, 5_000L).forEach {
             assertEquals(it, SegmentPlaybackPolicy.normalizedGapMs(it))

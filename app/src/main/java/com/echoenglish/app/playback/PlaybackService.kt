@@ -103,6 +103,8 @@ class PlaybackService : MediaSessionService() {
     private var isSegmentGapPaused = false
     private var isFollowAlongGap = false
     private var segmentGapRemainingMs = 0L
+    private var segmentGapDurationMs = 0L
+    private var segmentGapPlaybackSpeed = 1f
     private var gapDeadlineElapsedMs = 0L
     private var pendingGapAction: SegmentBoundaryAction? = null
 
@@ -1074,6 +1076,8 @@ class PlaybackService : MediaSessionService() {
         playbackTaskActive = !paused
         pendingGapAction = action
         segmentGapRemainingMs = durationMs.coerceAtLeast(0L)
+        segmentGapDurationMs = segmentGapRemainingMs
+        segmentGapPlaybackSpeed = player.playbackParameters.speed
         gapDeadlineElapsedMs = SystemClock.elapsedRealtime() + segmentGapRemainingMs
         if (!paused) {
             acquireGapWakeLock()
@@ -1332,6 +1336,8 @@ class PlaybackService : MediaSessionService() {
         isSegmentGapPaused = false
         isFollowAlongGap = false
         segmentGapRemainingMs = 0L
+        segmentGapDurationMs = 0L
+        segmentGapPlaybackSpeed = 1f
         gapDeadlineElapsedMs = 0L
         pendingGapAction = null
     }
@@ -1395,10 +1401,17 @@ class PlaybackService : MediaSessionService() {
         val start = starts.getOrElse(segmentIndex) { 0 }
         val end = ends.getOrElse(segmentIndex) { durationMs() }
         val position = absolutePositionMs()
-        val subtitlePosition = if (isInSegmentGap) {
-            (end - 1).coerceAtLeast(start)
-        } else {
-            position
+        val subtitlePosition = when {
+            isInSegmentGap && isFollowAlongGap ->
+                SegmentPlaybackPolicy.followAlongSubtitlePositionMs(
+                    segmentStartMs = start,
+                    segmentEndMs = end,
+                    gapDurationMs = segmentGapDurationMs,
+                    gapRemainingMs = segmentGapRemainingMs,
+                    playbackSpeed = segmentGapPlaybackSpeed
+                )
+            isInSegmentGap -> (end - 1).coerceAtLeast(start)
+            else -> position
         }
         val cueIndex = PlaybackMath.subtitleIndexForPlayback(
             starts = cueStarts,

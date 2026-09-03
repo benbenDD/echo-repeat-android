@@ -57,6 +57,22 @@ object SegmentPlaybackPolicy {
         0L
     }
 
+    fun followAlongSubtitlePositionMs(
+        segmentStartMs: Long,
+        segmentEndMs: Long,
+        gapDurationMs: Long,
+        gapRemainingMs: Long,
+        playbackSpeed: Float
+    ): Long {
+        val safeStart = segmentStartMs.coerceAtLeast(0L)
+        val safeEnd = segmentEndMs.coerceAtLeast(safeStart)
+        if (safeEnd == safeStart) return safeStart
+        val elapsedWallMs = (gapDurationMs - gapRemainingMs)
+            .coerceIn(0L, gapDurationMs.coerceAtLeast(0L))
+        val audioElapsedMs = (elapsedWallMs * playbackSpeed.coerceAtLeast(0.25f)).toLong()
+        return (safeStart + audioElapsedMs).coerceIn(safeStart, safeEnd - 1L)
+    }
+
     fun canContinueIntoAdjacentNext(
         repeatCount: Int,
         repeatIndex: Int,
