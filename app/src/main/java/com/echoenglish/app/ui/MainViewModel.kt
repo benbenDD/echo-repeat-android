@@ -307,6 +307,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
             putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
             putExtra(
+                PlaybackContract.EXTRA_FOLLOW_ALONG,
+                activeSettings.followAlongEnabled
+            )
+            putExtra(
                 PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
                 shouldSkipSubtitleGaps(activeSettings, track.durationMs)
             )
@@ -641,6 +645,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sendService(Intent(app, PlaybackService::class.java).apply {
                 action = PlaybackContract.ACTION_UPDATE_GAP
                 putExtra(PlaybackContract.EXTRA_GAP_MS, value.segmentGapMs)
+            })
+        }
+        if (previous.followAlongEnabled != value.followAlongEnabled) {
+            sendService(Intent(app, PlaybackService::class.java).apply {
+                action = PlaybackContract.ACTION_UPDATE_FOLLOW_ALONG
+                putExtra(PlaybackContract.EXTRA_FOLLOW_ALONG, value.followAlongEnabled)
             })
         }
         if (previous.speed != value.speed) {

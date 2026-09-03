@@ -26,6 +26,7 @@ enum class RoundedGlyphKind {
     LEAD_IN,
     LEAD_OUT,
     GAP,
+    MICROPHONE,
     SPEED,
     QUEUE,
     BEDTIME,
@@ -136,6 +137,27 @@ fun RoundedGlyph(
                 drawRoundRect(tint, p(16f, 6f), Size(4f * s, 12f * s), CornerRadius(2f * s))
                 drawCircle(tint, 1.1f * s, p(11f, 12f))
                 drawCircle(tint, 1.1f * s, p(14f, 12f))
+            }
+
+            RoundedGlyphKind.MICROPHONE -> {
+                drawRoundRect(
+                    tint,
+                    p(8.5f, 3f),
+                    Size(7f * s, 12f * s),
+                    CornerRadius(3.5f * s),
+                    style = stroke
+                )
+                drawArc(
+                    tint,
+                    startAngle = 0f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = p(5.5f, 8f),
+                    size = Size(13f * s, 10f * s),
+                    style = stroke
+                )
+                drawLine(tint, p(12f, 18f), p(12f, 21f), line, StrokeCap.Round)
+                drawLine(tint, p(8.5f, 21f), p(15.5f, 21f), line, StrokeCap.Round)
             }
 
             RoundedGlyphKind.SPEED -> {

@@ -39,6 +39,7 @@ data class PlaybackSnapshot(
     val sleepDeadlineMs: Long = 0,
     val isInSegmentGap: Boolean = false,
     val isSegmentGapPaused: Boolean = false,
+    val isFollowAlongGap: Boolean = false,
     val segmentGapRemainingMs: Long = 0,
     val completed: Boolean = false,
     val stopReason: PlaybackStopReason = PlaybackStopReason.NONE,

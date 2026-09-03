@@ -16,6 +16,7 @@ class SettingsRepository(private val context: Context) {
         val SECONDS = intPreferencesKey("segment_seconds")
         val REPEATS = intPreferencesKey("repeat_count")
         val GAP_MS = longPreferencesKey("segment_gap_ms")
+        val FOLLOW_ALONG = booleanPreferencesKey("follow_along_enabled")
         val SPEED = floatPreferencesKey("speed")
         val LEAD_IN = longPreferencesKey("lead_in")
         val LEAD_OUT = longPreferencesKey("lead_out")
@@ -34,6 +35,7 @@ class SettingsRepository(private val context: Context) {
             segmentSeconds = p[Keys.SECONDS] ?: 15,
             repeatCount = p[Keys.REPEATS] ?: 3,
             segmentGapMs = (p[Keys.GAP_MS] ?: 0L).coerceIn(0L, 5_000L),
+            followAlongEnabled = p[Keys.FOLLOW_ALONG] ?: false,
             speed = p[Keys.SPEED] ?: 1f,
             leadInMs = p[Keys.LEAD_IN] ?: 300,
             leadOutMs = p[Keys.LEAD_OUT] ?: 500,
@@ -52,6 +54,7 @@ class SettingsRepository(private val context: Context) {
         p[Keys.SECONDS] = value.segmentSeconds
         p[Keys.REPEATS] = value.repeatCount
         p[Keys.GAP_MS] = value.segmentGapMs.coerceIn(0L, 5_000L)
+        p[Keys.FOLLOW_ALONG] = value.followAlongEnabled
         p[Keys.SPEED] = value.speed
         p[Keys.LEAD_IN] = value.leadInMs
         p[Keys.LEAD_OUT] = value.leadOutMs

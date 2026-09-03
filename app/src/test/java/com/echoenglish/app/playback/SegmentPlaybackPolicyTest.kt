@@ -62,6 +62,74 @@ class SegmentPlaybackPolicyTest {
         assertFalse(SegmentPlaybackPolicy.requiresExactBoundary(1, 500, false, false))
         assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(1, 0, true, false))
         assertTrue(SegmentPlaybackPolicy.requiresExactBoundary(1, 0, false, true))
+        assertTrue(
+            SegmentPlaybackPolicy.requiresExactBoundary(
+                repeatCount = 1,
+                segmentGapMs = 0,
+                isLastSegment = false,
+                pendingSleepStop = false,
+                followAlongEnabled = true
+            )
+        )
+    }
+
+    @Test fun followAlongWaitMatchesActualPlaybackDurationAtNormalSpeed() {
+        assertEquals(
+            8_000L,
+            SegmentPlaybackPolicy.boundaryPauseDurationMs(
+                action = SegmentBoundaryAction.REPEAT_CURRENT,
+                segmentDurationMs = 8_000L,
+                playbackSpeed = 1f,
+                configuredGapMs = 500L,
+                followAlongEnabled = true
+            )
+        )
+    }
+
+    @Test fun followAlongWaitScalesWithPlaybackSpeed() {
+        assertEquals(
+            16_000L,
+            SegmentPlaybackPolicy.boundaryPauseDurationMs(
+                SegmentBoundaryAction.NEXT_SEGMENT,
+                segmentDurationMs = 8_000L,
+                playbackSpeed = .5f,
+                configuredGapMs = 0L,
+                followAlongEnabled = true
+            )
+        )
+        assertEquals(
+            4_000L,
+            SegmentPlaybackPolicy.boundaryPauseDurationMs(
+                SegmentBoundaryAction.COMPLETE,
+                segmentDurationMs = 8_000L,
+                playbackSpeed = 2f,
+                configuredGapMs = 0L,
+                followAlongEnabled = true
+            )
+        )
+    }
+
+    @Test fun configuredGapIsUsedOnlyWhenFollowAlongIsOff() {
+        assertEquals(
+            1_000L,
+            SegmentPlaybackPolicy.boundaryPauseDurationMs(
+                SegmentBoundaryAction.REPEAT_CURRENT,
+                segmentDurationMs = 8_000L,
+                playbackSpeed = 1f,
+                configuredGapMs = 1_000L,
+                followAlongEnabled = false
+            )
+        )
+        assertEquals(
+            0L,
+            SegmentPlaybackPolicy.boundaryPauseDurationMs(
+                SegmentBoundaryAction.NEXT_SEGMENT,
+                segmentDurationMs = 8_000L,
+                playbackSpeed = 1f,
+                configuredGapMs = 1_000L,
+                followAlongEnabled = false
+            )
+        )
     }
 
     @Test fun supportedGapValuesArePreserved() {

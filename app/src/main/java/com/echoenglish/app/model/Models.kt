@@ -13,6 +13,7 @@ data class PlaybackSettings(
     val segmentSeconds: Int = 15,
     val repeatCount: Int = 3,
     val segmentGapMs: Long = 0,
+    val followAlongEnabled: Boolean = false,
     val speed: Float = 1f,
     val leadInMs: Long = 300,
     val leadOutMs: Long = 500,

@@ -30,15 +30,32 @@ object SegmentPlaybackPolicy {
         segmentGapMs: Long,
         isLastSegment: Boolean,
         pendingSleepStop: Boolean,
-        skipSubtitleGaps: Boolean = false
+        skipSubtitleGaps: Boolean = false,
+        followAlongEnabled: Boolean = false
     ): Boolean =
         skipSubtitleGaps ||
+            followAlongEnabled ||
             repeatCount != 1 ||
             isLastSegment ||
             pendingSleepStop
 
     fun shouldInsertGap(action: SegmentBoundaryAction, segmentGapMs: Long): Boolean =
         action == SegmentBoundaryAction.REPEAT_CURRENT && segmentGapMs > 0
+
+    fun boundaryPauseDurationMs(
+        action: SegmentBoundaryAction,
+        segmentDurationMs: Long,
+        playbackSpeed: Float,
+        configuredGapMs: Long,
+        followAlongEnabled: Boolean
+    ): Long = if (followAlongEnabled) {
+        (segmentDurationMs.coerceAtLeast(0) / playbackSpeed.coerceAtLeast(0.25f))
+            .toLong()
+    } else if (shouldInsertGap(action, configuredGapMs)) {
+        normalizedGapMs(configuredGapMs)
+    } else {
+        0L
+    }
 
     fun canContinueIntoAdjacentNext(
         repeatCount: Int,

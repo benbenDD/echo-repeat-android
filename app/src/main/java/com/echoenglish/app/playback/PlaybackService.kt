@@ -66,6 +66,7 @@ class PlaybackService : MediaSessionService() {
     private var repeatIndex = 1
     private var repeatCount = 1
     private var segmentGapMs = 0L
+    private var followAlongEnabled = false
     private var skipSubtitleGaps = false
     private var currentTitle = ""
     private var knownDurationMs = 0L
@@ -100,6 +101,7 @@ class PlaybackService : MediaSessionService() {
     private var gapRunnable: Runnable? = null
     private var isInSegmentGap = false
     private var isSegmentGapPaused = false
+    private var isFollowAlongGap = false
     private var segmentGapRemainingMs = 0L
     private var gapDeadlineElapsedMs = 0L
     private var pendingGapAction: SegmentBoundaryAction? = null
@@ -304,6 +306,9 @@ class PlaybackService : MediaSessionService() {
             PlaybackContract.ACTION_UPDATE_BOOKMARKS -> updateBookmarks(intent)
             PlaybackContract.ACTION_UPDATE_REPEATS -> updateRepeats(intent.getIntExtra(PlaybackContract.EXTRA_REPEATS, repeatCount))
             PlaybackContract.ACTION_UPDATE_GAP -> updateGap(intent.getLongExtra(PlaybackContract.EXTRA_GAP_MS, segmentGapMs))
+            PlaybackContract.ACTION_UPDATE_FOLLOW_ALONG -> updateFollowAlong(
+                intent.getBooleanExtra(PlaybackContract.EXTRA_FOLLOW_ALONG, followAlongEnabled)
+            )
             PlaybackContract.ACTION_UPDATE_SPEED -> updateSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
             PlaybackContract.ACTION_TIMER -> setTimer(intent)
             PlaybackContract.ACTION_CANCEL_TIMER -> clearTimer()
@@ -402,6 +407,10 @@ class PlaybackService : MediaSessionService() {
         repeatCount = intent.getIntExtra(PlaybackContract.EXTRA_REPEATS, 1).coerceAtLeast(0)
         segmentGapMs = SegmentPlaybackPolicy.normalizedGapMs(
             intent.getLongExtra(PlaybackContract.EXTRA_GAP_MS, 0L)
+        )
+        followAlongEnabled = intent.getBooleanExtra(
+            PlaybackContract.EXTRA_FOLLOW_ALONG,
+            false
         )
         skipSubtitleGaps = intent.getBooleanExtra(
             PlaybackContract.EXTRA_SKIP_SUBTITLE_GAPS,
@@ -511,13 +520,14 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun requiresPipelineClipping(): Boolean =
-        repeatCount != 1 || skipSubtitleGaps
+        repeatCount != 1 || skipSubtitleGaps || followAlongEnabled
 
     private fun isAdjacent(currentIndex: Int, nextIndex: Int): Boolean =
         nextIndex in starts.indices &&
             kotlin.math.abs(ends[currentIndex] - starts[nextIndex]) <= ADJACENT_TOLERANCE_MS
 
     private fun adjacentNextForQueue(): Int? {
+        if (followAlongEnabled) return null
         val nextIndex = segmentIndex + 1
         return nextIndex.takeIf {
             SegmentPlaybackPolicy.canContinueIntoAdjacentNext(
@@ -738,7 +748,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun updateGap(value: Long) {
         val newGap = SegmentPlaybackPolicy.normalizedGapMs(value)
-        if (!isInSegmentGap) {
+        if (!isInSegmentGap || isFollowAlongGap) {
             segmentGapMs = newGap
             publish()
             return
@@ -749,7 +759,40 @@ class PlaybackService : MediaSessionService() {
         if (newGap == 0L) {
             executeBoundaryAction(SegmentBoundaryAction.REPEAT_CURRENT)
         } else {
-            beginGap(SegmentBoundaryAction.REPEAT_CURRENT, paused = !shouldContinue)
+            beginGap(
+                SegmentBoundaryAction.REPEAT_CURRENT,
+                durationMs = newGap,
+                paused = !shouldContinue,
+                followAlongGap = false
+            )
+        }
+        publish()
+    }
+
+    private fun updateFollowAlong(enabled: Boolean) {
+        if (followAlongEnabled == enabled) return
+        val wasInGap = isInSegmentGap
+        val continuePlaying = effectiveIsPlaying()
+        val absolute = absolutePositionMs()
+        followAlongEnabled = enabled
+        if (wasInGap) {
+            val action = pendingGapAction ?: SegmentBoundaryAction.REPEAT_CURRENT
+            val shouldContinue = !isSegmentGapPaused
+            cancelAutomatedWork(clearGap = true)
+            val duration = boundaryPauseDurationMs(action)
+            if (duration > 0L) {
+                beginGap(
+                    action,
+                    durationMs = duration,
+                    paused = !shouldContinue,
+                    followAlongGap = followAlongEnabled
+                )
+            } else {
+                executeBoundaryAction(action)
+            }
+        } else if (starts.isNotEmpty()) {
+            cancelAutomatedWork(clearGap = true)
+            startPlaybackAt(absolute, continuePlaying)
         }
         publish()
     }
@@ -993,25 +1036,44 @@ class PlaybackService : MediaSessionService() {
         } else {
             clearRepeatTransitionTiming()
         }
-        if (SegmentPlaybackPolicy.shouldInsertGap(action, segmentGapMs)) {
-            beginGap(action)
+        val pauseDurationMs = boundaryPauseDurationMs(action)
+        if (pauseDurationMs > 0L) {
+            beginGap(
+                action,
+                durationMs = pauseDurationMs,
+                followAlongGap = followAlongEnabled
+            )
         } else {
             executeBoundaryAction(action)
         }
     }
 
-    private fun beginGap(action: SegmentBoundaryAction, paused: Boolean = false) {
-        require(action == SegmentBoundaryAction.REPEAT_CURRENT) {
-            "Configured gaps are only valid between repeats of the same segment"
-        }
+    private fun boundaryPauseDurationMs(action: SegmentBoundaryAction): Long =
+        SegmentPlaybackPolicy.boundaryPauseDurationMs(
+            action = action,
+            segmentDurationMs = (
+                ends.getOrElse(segmentIndex) { 0L } - starts.getOrElse(segmentIndex) { 0L }
+                ).coerceAtLeast(0L),
+            playbackSpeed = player.playbackParameters.speed,
+            configuredGapMs = segmentGapMs,
+            followAlongEnabled = followAlongEnabled
+        )
+
+    private fun beginGap(
+        action: SegmentBoundaryAction,
+        durationMs: Long,
+        paused: Boolean = false,
+        followAlongGap: Boolean
+    ) {
         cancelBoundary()
         gapRunnable?.let(handler::removeCallbacks)
         gapRunnable = null
         isInSegmentGap = true
         isSegmentGapPaused = paused
+        isFollowAlongGap = followAlongGap
         playbackTaskActive = !paused
         pendingGapAction = action
-        segmentGapRemainingMs = segmentGapMs
+        segmentGapRemainingMs = durationMs.coerceAtLeast(0L)
         gapDeadlineElapsedMs = SystemClock.elapsedRealtime() + segmentGapRemainingMs
         if (!paused) {
             acquireGapWakeLock()
@@ -1019,8 +1081,8 @@ class PlaybackService : MediaSessionService() {
         }
         Log.d(
             TAG,
-            "gap started generation=$scheduleGeneration duration=$segmentGapMs " +
-                "action=$action paused=$paused wake=${gapWakeLock.isHeld}"
+            "gap started generation=$scheduleGeneration duration=$segmentGapRemainingMs " +
+                "action=$action followAlong=$followAlongGap paused=$paused wake=${gapWakeLock.isHeld}"
         )
         publish()
     }
@@ -1048,8 +1110,9 @@ class PlaybackService : MediaSessionService() {
             return
         }
         gapRunnable = null
+        val action = pendingGapAction ?: return clearGapState()
         clearGapState()
-        executeBoundaryAction(SegmentBoundaryAction.REPEAT_CURRENT)
+        executeBoundaryAction(action)
     }
 
     private fun executeBoundaryAction(action: SegmentBoundaryAction) {
@@ -1267,6 +1330,7 @@ class PlaybackService : MediaSessionService() {
         releaseGapWakeLock()
         isInSegmentGap = false
         isSegmentGapPaused = false
+        isFollowAlongGap = false
         segmentGapRemainingMs = 0L
         gapDeadlineElapsedMs = 0L
         pendingGapAction = null
@@ -1372,6 +1436,7 @@ class PlaybackService : MediaSessionService() {
                 sleepDeadlineMs = sleepDeadline,
                 isInSegmentGap = isInSegmentGap,
                 isSegmentGapPaused = isSegmentGapPaused,
+                isFollowAlongGap = isFollowAlongGap,
                 segmentGapRemainingMs = segmentGapRemainingMs,
                 completed = completed,
                 stopReason = stopReason,
