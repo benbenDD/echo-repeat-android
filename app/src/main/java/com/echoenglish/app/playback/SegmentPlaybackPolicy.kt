@@ -127,4 +127,11 @@ object SegmentPlaybackPolicy {
 
     fun gapWakeLockTimeoutMs(gapDurationMs: Long): Long =
         gapDurationMs.coerceAtLeast(0L) + GAP_WAKE_LOCK_FINISH_MARGIN_MS
+
+    fun mediaDrivenGapRemainingMs(
+        segmentEndMs: Long,
+        playbackPositionMs: Long,
+        playbackSpeed: Float
+    ): Long = ((segmentEndMs - playbackPositionMs).coerceAtLeast(0L) /
+        playbackSpeed.coerceAtLeast(0.25f)).toLong()
 }

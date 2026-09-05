@@ -198,6 +198,24 @@ class SegmentPlaybackPolicyTest {
         assertEquals(30_000L, SegmentPlaybackPolicy.gapWakeLockTimeoutMs(0L))
     }
 
+    @Test fun mediaDrivenFollowAlongUsesRemainingAudioAtCurrentSpeed() {
+        assertEquals(
+            4_000L,
+            SegmentPlaybackPolicy.mediaDrivenGapRemainingMs(18_000L, 10_000L, 2f)
+        )
+        assertEquals(
+            16_000L,
+            SegmentPlaybackPolicy.mediaDrivenGapRemainingMs(18_000L, 10_000L, .5f)
+        )
+    }
+
+    @Test fun mediaDrivenFollowAlongNeverReportsNegativeRemainingTime() {
+        assertEquals(
+            0L,
+            SegmentPlaybackPolicy.mediaDrivenGapRemainingMs(10_000L, 10_500L, 1f)
+        )
+    }
+
     @Test fun repeatedPlaybackAlwaysUsesIdenticalBoundaries() {
         val start = 12_345L
         val end = 18_765L

@@ -42,7 +42,7 @@ class PlaybackDiagnostics(
     }
 
     companion object {
-        internal const val MAX_FILE_BYTES = 256 * 1024L
+        internal const val MAX_FILE_BYTES = 1024 * 1024L
         private const val ENTRY_OVERHEAD_BYTES = 96
         private const val TAG = "EchoDiagnostics"
     }
