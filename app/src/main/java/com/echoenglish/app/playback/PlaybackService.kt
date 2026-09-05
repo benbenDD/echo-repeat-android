@@ -29,6 +29,7 @@ import androidx.media3.session.MediaSessionService
 import com.echoenglish.app.EchoEnglishApp
 import com.echoenglish.app.MainActivity
 import com.echoenglish.app.model.Segment
+import com.echoenglish.app.model.FloatingLyricsColor
 import com.echoenglish.app.util.Segmenter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -133,7 +134,11 @@ class PlaybackService : MediaSessionService() {
         app = application as EchoEnglishApp
         playbackSessionStore = app.playbackSessionStore
         diagnostics = PlaybackDiagnostics(this, persistenceScope)
-        lyricsDisplay = LyricsDisplayController(this)
+        lyricsDisplay = LyricsDisplayController(
+            context = this,
+            onCloseFloating = { persistFloatingLyricsChange(enabled = false) },
+            onLockFloating = { persistFloatingLyricsChange(locked = it) }
+        )
         diagnostics.record("service_created")
         persistenceScope.launch {
             val settings = app.settingsRepository.settings.first()
@@ -141,6 +146,7 @@ class PlaybackService : MediaSessionService() {
                 lyricsDisplay.configure(
                     settings.floatingLyricsEnabled,
                     settings.floatingLyricsLocked,
+                    settings.floatingLyricsColor,
                     settings.notificationLyricsEnabled
                 )
                 publish()
@@ -346,6 +352,11 @@ class PlaybackService : MediaSessionService() {
                 lyricsDisplay.configure(
                     intent.getBooleanExtra(PlaybackContract.EXTRA_FLOATING_LYRICS, false),
                     intent.getBooleanExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_LOCKED, false),
+                    runCatching {
+                        FloatingLyricsColor.valueOf(
+                            intent.getStringExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_COLOR) ?: "ORANGE"
+                        )
+                    }.getOrDefault(FloatingLyricsColor.ORANGE),
                     intent.getBooleanExtra(PlaybackContract.EXTRA_NOTIFICATION_LYRICS, false)
                 )
                 publish()
@@ -1529,6 +1540,18 @@ class PlaybackService : MediaSessionService() {
                 errorMessage = playbackError
             )
         )
+    }
+
+    private fun persistFloatingLyricsChange(enabled: Boolean? = null, locked: Boolean? = null) {
+        persistenceScope.launch {
+            val current = app.settingsRepository.settings.first()
+            app.settingsRepository.save(
+                current.copy(
+                    floatingLyricsEnabled = enabled ?: current.floatingLyricsEnabled,
+                    floatingLyricsLocked = locked ?: current.floatingLyricsLocked
+                )
+            )
+        }
     }
 
     private fun persistPlaybackSession(

@@ -24,6 +24,7 @@ class SettingsRepository(private val context: Context) {
         val STOP_AT_END = booleanPreferencesKey("stop_at_segment_end")
         val FLOATING_LYRICS = booleanPreferencesKey("floating_lyrics_enabled")
         val FLOATING_LYRICS_LOCKED = booleanPreferencesKey("floating_lyrics_locked")
+        val FLOATING_LYRICS_COLOR = stringPreferencesKey("floating_lyrics_color")
         val NOTIFICATION_LYRICS = booleanPreferencesKey("notification_lyrics_enabled")
         val LAST_TRACK = longPreferencesKey("last_track")
     }
@@ -48,6 +49,9 @@ class SettingsRepository(private val context: Context) {
             stopAtSegmentEnd = p[Keys.STOP_AT_END] ?: true,
             floatingLyricsEnabled = p[Keys.FLOATING_LYRICS] ?: false,
             floatingLyricsLocked = p[Keys.FLOATING_LYRICS_LOCKED] ?: false,
+            floatingLyricsColor = runCatching {
+                FloatingLyricsColor.valueOf(p[Keys.FLOATING_LYRICS_COLOR] ?: "ORANGE")
+            }.getOrDefault(FloatingLyricsColor.ORANGE),
             notificationLyricsEnabled = p[Keys.NOTIFICATION_LYRICS] ?: false
         )
     }
@@ -68,6 +72,7 @@ class SettingsRepository(private val context: Context) {
         p[Keys.STOP_AT_END] = value.stopAtSegmentEnd
         p[Keys.FLOATING_LYRICS] = value.floatingLyricsEnabled
         p[Keys.FLOATING_LYRICS_LOCKED] = value.floatingLyricsLocked
+        p[Keys.FLOATING_LYRICS_COLOR] = value.floatingLyricsColor.name
         p[Keys.NOTIFICATION_LYRICS] = value.notificationLyricsEnabled
     }
 

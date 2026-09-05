@@ -46,5 +46,6 @@ object PlaybackContract {
     const val EXTRA_STOP_AT_END = "stop_at_end"
     const val EXTRA_FLOATING_LYRICS = "floating_lyrics"
     const val EXTRA_FLOATING_LYRICS_LOCKED = "floating_lyrics_locked"
+    const val EXTRA_FLOATING_LYRICS_COLOR = "floating_lyrics_color"
     const val EXTRA_NOTIFICATION_LYRICS = "notification_lyrics"
 }

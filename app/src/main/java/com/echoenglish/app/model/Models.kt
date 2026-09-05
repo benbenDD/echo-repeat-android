@@ -7,6 +7,7 @@ data class Segment(val startMs: Long, val endMs: Long, val text: String = "") {
 enum class SegmentMode { FIXED, SUBTITLE }
 enum class SubtitlePlaybackScope { FULL_TIMELINE, CUES_ONLY, BOOKMARKED_CUES }
 enum class PlaylistMode { STOP_AFTER_TRACK, LOOP_TRACK, SEQUENTIAL, LOOP_LIST }
+enum class FloatingLyricsColor { ORANGE, GREEN, WHITE }
 data class PlaybackSettings(
     val segmentMode: SegmentMode = SegmentMode.FIXED,
     val subtitlePlaybackScope: SubtitlePlaybackScope = SubtitlePlaybackScope.FULL_TIMELINE,
@@ -21,5 +22,6 @@ data class PlaybackSettings(
     val stopAtSegmentEnd: Boolean = true,
     val floatingLyricsEnabled: Boolean = false,
     val floatingLyricsLocked: Boolean = false,
+    val floatingLyricsColor: FloatingLyricsColor = FloatingLyricsColor.ORANGE,
     val notificationLyricsEnabled: Boolean = false
 )

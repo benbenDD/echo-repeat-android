@@ -975,14 +975,14 @@ private fun SettingsScreen(
             item {
                 SettingCard("桌面悬浮台词", RoundedGlyphKind.DISPLAY, Mint, MintLight, hint = "首次开启需要授予显示在其他应用上层权限；拖动台词可调整位置") {
                     ChoiceGrid(listOf("关闭" to false, "开启" to true), value.floatingLyricsEnabled) {
-                        onChange(value.copy(floatingLyricsEnabled = it))
+                        onChange(value.copy(floatingLyricsEnabled = it, floatingLyricsLocked = if (it) false else value.floatingLyricsLocked))
                     }
                 }
             }
             item {
-                SettingCard("锁定悬浮台词", RoundedGlyphKind.TARGET, Purple, PurpleLight, enabled = value.floatingLyricsEnabled, hint = if (value.floatingLyricsEnabled) "锁定后不响应触摸，避免遮挡下层应用操作" else "请先开启桌面悬浮台词") {
-                    ChoiceGrid(listOf("可拖动" to false, "已锁定" to true), value.floatingLyricsLocked, value.floatingLyricsEnabled) {
-                        onChange(value.copy(floatingLyricsLocked = it))
+                SettingCard("悬浮台词颜色", RoundedGlyphKind.DISPLAY, Sky, SkyLight, enabled = value.floatingLyricsEnabled, hint = if (value.floatingLyricsEnabled) "选择在不同桌面背景上更醒目的颜色" else "请先开启桌面悬浮台词") {
+                    ChoiceGrid(listOf("橙色" to FloatingLyricsColor.ORANGE, "绿色" to FloatingLyricsColor.GREEN, "白色" to FloatingLyricsColor.WHITE), value.floatingLyricsColor, value.floatingLyricsEnabled) {
+                        onChange(value.copy(floatingLyricsColor = it))
                     }
                 }
             }
@@ -1030,7 +1030,7 @@ private fun playbackSettingsSummary(value: PlaybackSettings): String {
 
 private fun lyricsDisplaySummary(value: PlaybackSettings): String {
     val enabled = buildList {
-        if (value.floatingLyricsEnabled) add(if (value.floatingLyricsLocked) "悬浮台词已锁定" else "悬浮台词可拖动")
+        if (value.floatingLyricsEnabled) add("悬浮台词")
         if (value.notificationLyricsEnabled) add("通知与锁屏")
     }
     return enabled.joinToString(" · ").ifBlank { "全部关闭" }

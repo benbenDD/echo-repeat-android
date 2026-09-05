@@ -23,5 +23,6 @@ class PlaybackSettingsTest {
         assertFalse(settings.floatingLyricsEnabled)
         assertFalse(settings.floatingLyricsLocked)
         assertFalse(settings.notificationLyricsEnabled)
+        assertEquals(FloatingLyricsColor.ORANGE, settings.floatingLyricsColor)
     }
 }

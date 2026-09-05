@@ -662,6 +662,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (
             previous.floatingLyricsEnabled != value.floatingLyricsEnabled ||
             previous.floatingLyricsLocked != value.floatingLyricsLocked ||
+            previous.floatingLyricsColor != value.floatingLyricsColor ||
             previous.notificationLyricsEnabled != value.notificationLyricsEnabled
         ) {
             refreshLyricsDisplay(value)
@@ -673,6 +674,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             action = PlaybackContract.ACTION_UPDATE_LYRICS_DISPLAY
             putExtra(PlaybackContract.EXTRA_FLOATING_LYRICS, value.floatingLyricsEnabled)
             putExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_LOCKED, value.floatingLyricsLocked)
+            putExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_COLOR, value.floatingLyricsColor.name)
             putExtra(PlaybackContract.EXTRA_NOTIFICATION_LYRICS, value.notificationLyricsEnabled)
         })
     }
