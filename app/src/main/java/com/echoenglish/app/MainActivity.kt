@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echoenglish.app.data.TrackEntity
@@ -105,7 +107,7 @@ private data class SegmentPickerRow(
 )
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
-private enum class SettingsSection { SEGMENTS, PRACTICE, PLAYBACK }
+private enum class SettingsSection { SEGMENTS, PRACTICE, PLAYBACK, DISPLAY }
 
 class MainActivity : ComponentActivity() {
     private val openPlayerRequests = MutableStateFlow(0)
@@ -175,6 +177,10 @@ private fun EchoEnglishUi(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.importUris(it) }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let(vm::importTree) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val context = LocalContext.current
+    val overlayPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        vm.refreshLyricsDisplay()
+    }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -229,7 +235,14 @@ private fun EchoEnglishUi(
                     expandedSectionName = expandedSettingsSection,
                     onExpandedSectionChange = { expandedSettingsSection = it },
                     listState = settingsListState,
-                    onChange = vm::updateSettings,
+                    onChange = { next ->
+                        if (next.floatingLyricsEnabled && !settings.floatingLyricsEnabled && !Settings.canDrawOverlays(context)) {
+                            overlayPermission.launch(
+                                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:${context.packageName}"))
+                            )
+                        }
+                        vm.updateSettings(next)
+                    },
                     onSubtitleOffsetChange = vm::updateSubtitleOffset
                 )
             }
@@ -842,6 +855,7 @@ private fun SettingsScreen(
             SettingsSection.SEGMENTS -> 1
             SettingsSection.PRACTICE -> 2
             SettingsSection.PLAYBACK -> 3
+            SettingsSection.DISPLAY -> 4
         }
         listState.animateScrollToItem(itemIndex)
         scrollToExpandedSection = null
@@ -943,6 +957,43 @@ private fun SettingsScreen(
             item { SettingCard("列表播放", RoundedGlyphKind.QUEUE, Pink, PinkLight) { ChoiceGrid(listOf("单曲停止" to PlaylistMode.STOP_AFTER_TRACK, "单曲循环" to PlaylistMode.LOOP_TRACK, "顺序播放" to PlaylistMode.SEQUENTIAL, "列表循环" to PlaylistMode.LOOP_LIST), value.playlistMode) { onChange(value.copy(playlistMode = it)) } } }
             item { SettingCard("定时到点", RoundedGlyphKind.BEDTIME, Color(0xFFC38D00), YellowLight) { ChoiceGrid(listOf("当前段结束" to true, "立即停止" to false), value.stopAtSegmentEnd) { onChange(value.copy(stopAtSegmentEnd = it)) } } }
         }
+        item {
+            SettingsCategoryCard(
+                title = "台词显示",
+                summary = lyricsDisplaySummary(value),
+                icon = RoundedGlyphKind.DISPLAY,
+                accent = Mint,
+                background = MintLight,
+                expanded = section == SettingsSection.DISPLAY
+            ) {
+                val target = if (section == SettingsSection.DISPLAY) null else SettingsSection.DISPLAY
+                onExpandedSectionChange(target?.name)
+                scrollToExpandedSection = target
+            }
+        }
+        if (section == SettingsSection.DISPLAY) {
+            item {
+                SettingCard("桌面悬浮台词", RoundedGlyphKind.DISPLAY, Mint, MintLight, hint = "首次开启需要授予显示在其他应用上层权限；拖动台词可调整位置") {
+                    ChoiceGrid(listOf("关闭" to false, "开启" to true), value.floatingLyricsEnabled) {
+                        onChange(value.copy(floatingLyricsEnabled = it))
+                    }
+                }
+            }
+            item {
+                SettingCard("锁定悬浮台词", RoundedGlyphKind.TARGET, Purple, PurpleLight, enabled = value.floatingLyricsEnabled, hint = if (value.floatingLyricsEnabled) "锁定后不响应触摸，避免遮挡下层应用操作" else "请先开启桌面悬浮台词") {
+                    ChoiceGrid(listOf("可拖动" to false, "已锁定" to true), value.floatingLyricsLocked, value.floatingLyricsEnabled) {
+                        onChange(value.copy(floatingLyricsLocked = it))
+                    }
+                }
+            }
+            item {
+                SettingCard("通知栏与锁屏台词", RoundedGlyphKind.SUBTITLES, Pink, PinkLight, hint = "通过静默通知实时显示当前台词；锁屏是否显示内容还取决于手机的隐私设置") {
+                    ChoiceGrid(listOf("关闭" to false, "开启" to true), value.notificationLyricsEnabled) {
+                        onChange(value.copy(notificationLyricsEnabled = it))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -975,6 +1026,14 @@ private fun playbackSettingsSummary(value: PlaybackSettings): String {
         PlaylistMode.LOOP_LIST -> "列表循环"
     }
     return "$playlist · 定时${if (value.stopAtSegmentEnd) "当前段结束" else "立即停止"}"
+}
+
+private fun lyricsDisplaySummary(value: PlaybackSettings): String {
+    val enabled = buildList {
+        if (value.floatingLyricsEnabled) add(if (value.floatingLyricsLocked) "悬浮台词已锁定" else "悬浮台词可拖动")
+        if (value.notificationLyricsEnabled) add("通知与锁屏")
+    }
+    return enabled.joinToString(" · ").ifBlank { "全部关闭" }
 }
 
 @Composable

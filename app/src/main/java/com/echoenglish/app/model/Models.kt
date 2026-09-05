@@ -18,5 +18,8 @@ data class PlaybackSettings(
     val leadInMs: Long = 300,
     val leadOutMs: Long = 500,
     val playlistMode: PlaylistMode = PlaylistMode.SEQUENTIAL,
-    val stopAtSegmentEnd: Boolean = true
+    val stopAtSegmentEnd: Boolean = true,
+    val floatingLyricsEnabled: Boolean = false,
+    val floatingLyricsLocked: Boolean = false,
+    val notificationLyricsEnabled: Boolean = false
 )

@@ -1,6 +1,7 @@
 package com.echoenglish.app.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class PlaybackSettingsTest {
@@ -15,4 +16,12 @@ class PlaybackSettingsTest {
         val settings = PlaybackSettings()
         assertEquals(300, settings.leadInMs)
         assertEquals(500, settings.leadOutMs)
-    }}
+    }
+
+    @Test fun lyricsDisplaysAreOptInAndUnlockedByDefault() {
+        val settings = PlaybackSettings()
+        assertFalse(settings.floatingLyricsEnabled)
+        assertFalse(settings.floatingLyricsLocked)
+        assertFalse(settings.notificationLyricsEnabled)
+    }
+}

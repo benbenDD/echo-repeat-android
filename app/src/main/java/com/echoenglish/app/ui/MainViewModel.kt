@@ -659,6 +659,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 putExtra(PlaybackContract.EXTRA_SPEED, value.speed)
             })
         }
+        if (
+            previous.floatingLyricsEnabled != value.floatingLyricsEnabled ||
+            previous.floatingLyricsLocked != value.floatingLyricsLocked ||
+            previous.notificationLyricsEnabled != value.notificationLyricsEnabled
+        ) {
+            refreshLyricsDisplay(value)
+        }
+    }
+
+    fun refreshLyricsDisplay(value: PlaybackSettings = mutableSettings.value) {
+        sendService(Intent(app, PlaybackService::class.java).apply {
+            action = PlaybackContract.ACTION_UPDATE_LYRICS_DISPLAY
+            putExtra(PlaybackContract.EXTRA_FLOATING_LYRICS, value.floatingLyricsEnabled)
+            putExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_LOCKED, value.floatingLyricsLocked)
+            putExtra(PlaybackContract.EXTRA_NOTIFICATION_LYRICS, value.notificationLyricsEnabled)
+        })
     }
 
     private fun rebuildActiveSegments(

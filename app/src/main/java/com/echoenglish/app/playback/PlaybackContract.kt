@@ -16,6 +16,7 @@ object PlaybackContract {
     const val ACTION_UPDATE_GAP = "com.echoenglish.UPDATE_GAP"
     const val ACTION_UPDATE_FOLLOW_ALONG = "com.echoenglish.UPDATE_FOLLOW_ALONG"
     const val ACTION_UPDATE_SPEED = "com.echoenglish.UPDATE_SPEED"
+    const val ACTION_UPDATE_LYRICS_DISPLAY = "com.echoenglish.UPDATE_LYRICS_DISPLAY"
     const val ACTION_TIMER = "com.echoenglish.TIMER"
     const val ACTION_CANCEL_TIMER = "com.echoenglish.CANCEL_TIMER"
     const val EXTRA_URI = "uri"
@@ -43,4 +44,7 @@ object PlaybackContract {
     const val EXTRA_DURATION = "duration"
     const val EXTRA_TIMER_MINUTES = "timer_minutes"
     const val EXTRA_STOP_AT_END = "stop_at_end"
+    const val EXTRA_FLOATING_LYRICS = "floating_lyrics"
+    const val EXTRA_FLOATING_LYRICS_LOCKED = "floating_lyrics_locked"
+    const val EXTRA_NOTIFICATION_LYRICS = "notification_lyrics"
 }

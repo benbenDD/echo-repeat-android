@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -49,6 +50,7 @@ class PlaybackService : MediaSessionService() {
     private lateinit var app: EchoEnglishApp
     private lateinit var playbackSessionStore: PlaybackSessionStore
     private lateinit var diagnostics: PlaybackDiagnostics
+    private lateinit var lyricsDisplay: LyricsDisplayController
     private var lastSessionSavedAtMs = 0L
     private var lastDatabaseSavedAtMs = 0L
 
@@ -131,7 +133,19 @@ class PlaybackService : MediaSessionService() {
         app = application as EchoEnglishApp
         playbackSessionStore = app.playbackSessionStore
         diagnostics = PlaybackDiagnostics(this, persistenceScope)
+        lyricsDisplay = LyricsDisplayController(this)
         diagnostics.record("service_created")
+        persistenceScope.launch {
+            val settings = app.settingsRepository.settings.first()
+            handler.post {
+                lyricsDisplay.configure(
+                    settings.floatingLyricsEnabled,
+                    settings.floatingLyricsLocked,
+                    settings.notificationLyricsEnabled
+                )
+                publish()
+            }
+        }
         gapWakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:segment-gap")
             .apply { setReferenceCounted(false) }
@@ -328,6 +342,14 @@ class PlaybackService : MediaSessionService() {
                 intent.getBooleanExtra(PlaybackContract.EXTRA_FOLLOW_ALONG, followAlongEnabled)
             )
             PlaybackContract.ACTION_UPDATE_SPEED -> updateSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
+            PlaybackContract.ACTION_UPDATE_LYRICS_DISPLAY -> {
+                lyricsDisplay.configure(
+                    intent.getBooleanExtra(PlaybackContract.EXTRA_FLOATING_LYRICS, false),
+                    intent.getBooleanExtra(PlaybackContract.EXTRA_FLOATING_LYRICS_LOCKED, false),
+                    intent.getBooleanExtra(PlaybackContract.EXTRA_NOTIFICATION_LYRICS, false)
+                )
+                publish()
+            }
             PlaybackContract.ACTION_TIMER -> setTimer(intent)
             PlaybackContract.ACTION_CANCEL_TIMER -> clearTimer()
         }
@@ -1477,6 +1499,7 @@ class PlaybackService : MediaSessionService() {
         val nextText = cueTexts.getOrElse(cueIndex + 1) {
             texts.getOrElse(segmentIndex + 1) { "" }
         }
+        lyricsDisplay.update(currentTitle, currentText)
         PlaybackBus.update(
             PlaybackSnapshot(
                 mediaId = sourceMediaId,
@@ -1590,6 +1613,7 @@ class PlaybackService : MediaSessionService() {
         }
         cancelBoundary()
         releaseGapWakeLock()
+        if (::lyricsDisplay.isInitialized) lyricsDisplay.release()
         session.release()
         player.release()
         persistenceScope.cancel()

@@ -22,6 +22,9 @@ class SettingsRepository(private val context: Context) {
         val LEAD_OUT = longPreferencesKey("lead_out")
         val LIST_MODE = stringPreferencesKey("playlist_mode")
         val STOP_AT_END = booleanPreferencesKey("stop_at_segment_end")
+        val FLOATING_LYRICS = booleanPreferencesKey("floating_lyrics_enabled")
+        val FLOATING_LYRICS_LOCKED = booleanPreferencesKey("floating_lyrics_locked")
+        val NOTIFICATION_LYRICS = booleanPreferencesKey("notification_lyrics_enabled")
         val LAST_TRACK = longPreferencesKey("last_track")
     }
 
@@ -42,7 +45,10 @@ class SettingsRepository(private val context: Context) {
             playlistMode = runCatching {
                 PlaylistMode.valueOf(p[Keys.LIST_MODE] ?: "SEQUENTIAL")
             }.getOrDefault(PlaylistMode.SEQUENTIAL),
-            stopAtSegmentEnd = p[Keys.STOP_AT_END] ?: true
+            stopAtSegmentEnd = p[Keys.STOP_AT_END] ?: true,
+            floatingLyricsEnabled = p[Keys.FLOATING_LYRICS] ?: false,
+            floatingLyricsLocked = p[Keys.FLOATING_LYRICS_LOCKED] ?: false,
+            notificationLyricsEnabled = p[Keys.NOTIFICATION_LYRICS] ?: false
         )
     }
 
@@ -60,6 +66,9 @@ class SettingsRepository(private val context: Context) {
         p[Keys.LEAD_OUT] = value.leadOutMs
         p[Keys.LIST_MODE] = value.playlistMode.name
         p[Keys.STOP_AT_END] = value.stopAtSegmentEnd
+        p[Keys.FLOATING_LYRICS] = value.floatingLyricsEnabled
+        p[Keys.FLOATING_LYRICS_LOCKED] = value.floatingLyricsLocked
+        p[Keys.NOTIFICATION_LYRICS] = value.notificationLyricsEnabled
     }
 
     suspend fun saveLastTrack(id: Long) = context.dataStore.edit { it[Keys.LAST_TRACK] = id }

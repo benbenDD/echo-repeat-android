@@ -33,6 +33,7 @@ enum class RoundedGlyphKind {
     ALARM,
     TARGET,
     BOOKMARK,
+    DISPLAY,
     PREVIOUS,
     NEXT
 }
@@ -226,6 +227,14 @@ fun RoundedGlyph(
                     close()
                 }
                 drawPath(path, tint, style = stroke)
+            }
+
+            RoundedGlyphKind.DISPLAY -> {
+                drawRoundRect(tint, p(3f, 4f), Size(18f * s, 13f * s), CornerRadius(2f * s), style = stroke)
+                drawLine(tint, p(8f, 21f), p(16f, 21f), line, StrokeCap.Round)
+                drawLine(tint, p(12f, 17f), p(12f, 21f), line, StrokeCap.Round)
+                drawLine(tint, p(7f, 9f), p(17f, 9f), line, StrokeCap.Round)
+                drawLine(tint, p(8.5f, 13f), p(15.5f, 13f), line, StrokeCap.Round)
             }
 
             RoundedGlyphKind.PREVIOUS -> {
