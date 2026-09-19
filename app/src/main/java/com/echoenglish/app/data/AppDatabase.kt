@@ -11,6 +11,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
     DatabaseSchema.VERSION
 ) {
     val trackDao: TrackDao by lazy { TrackDao(this) }
+    val folderDao: FolderDao by lazy { FolderDao(this) }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE tracks (
@@ -31,13 +32,16 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
             lastPlayedAt INTEGER NOT NULL,
             completed INTEGER NOT NULL,
             sortOrder INTEGER NOT NULL,
-            available INTEGER NOT NULL
+            available INTEGER NOT NULL,
+            folderId INTEGER
         )""")
         db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
+        DatabaseSchema.MIGRATION_3_TO_4.take(1).forEach(db::execSQL)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL(DatabaseSchema.MIGRATION_1_TO_2)
         if (oldVersion < 3) db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
+        if (oldVersion < 4) DatabaseSchema.MIGRATION_3_TO_4.forEach(db::execSQL)
     }
 }

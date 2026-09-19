@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.echoenglish.app.EchoEnglishApp
 import com.echoenglish.app.data.LibraryRepository
 import com.echoenglish.app.data.TrackEntity
+import com.echoenglish.app.data.PlaylistFolder
 import com.echoenglish.app.model.PlaybackSettings
 import com.echoenglish.app.model.PlaybackSettingsChangePolicy
 import com.echoenglish.app.model.PlaylistMode
@@ -53,6 +54,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dao = app.database.trackDao
     private val library = LibraryRepository(app, dao)
     val tracks = dao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val folderDao = app.database.folderDao
+    val folders = folderDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val mutableSettings = MutableStateFlow(PlaybackSettings())
     val settings = mutableSettings.asStateFlow()
     val playback = PlaybackBus.state
@@ -121,15 +124,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun importUris(uris: List<Uri>) = viewModelScope.launch {
+    fun importUris(uris: List<Uri>, folderId: Long? = null) = viewModelScope.launch {
         mutableMessage.value = "正在导入…"
-        val result = library.importUris(uris)
+        val result = library.importUris(uris, folderId)
         mutableMessage.value = "已导入 ${result.audioCount} 个音频，匹配 ${result.matchedCount} 个字幕，重复 ${result.duplicateCount} 个"
     }
 
-    fun importTree(uri: Uri) = viewModelScope.launch {
+    fun importTree(uri: Uri, folderId: Long? = null) = viewModelScope.launch {
         runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        importUris(library.collectTree(uri))
+        importUris(library.collectTree(uri), folderId)
     }
 
     private fun sendService(intent: Intent): Boolean {
@@ -895,6 +898,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun delete(track: TrackEntity) = viewModelScope.launch { dao.delete(track) }
+    fun createFolder(name: String) = viewModelScope.launch {
+        val id = folderDao.create(name)
+        mutableMessage.value = if (id > 0) "文件夹已创建" else "文件夹名称为空或已经存在"
+    }
+    fun renameFolder(folder: PlaylistFolder, name: String) = viewModelScope.launch {
+        val changed = runCatching { folderDao.rename(folder.id, name) }.getOrDefault(false)
+        mutableMessage.value = if (changed) "文件夹已重命名" else "名称为空或已经存在"
+    }
+    fun deleteFolder(folder: PlaylistFolder) = viewModelScope.launch {
+        folderDao.delete(folder.id)
+        dao.refreshFromDatabase()
+        mutableCurrent.value?.takeIf { it.folderId == folder.id }?.let {
+            mutableCurrent.value = it.copy(folderId = null)
+        }
+        mutableMessage.value = "文件夹已删除，其中的音频已移到未分类"
+    }
+    fun moveTrackToFolder(track: TrackEntity, folderId: Long?) = viewModelScope.launch {
+        dao.moveToFolder(track.id, folderId)
+        if (mutableCurrent.value?.id == track.id) mutableCurrent.value = track.copy(folderId = folderId)
+        mutableMessage.value = if (folderId == null) "已移到未分类" else "已移动到文件夹"
+    }
     fun clearMessage() { mutableMessage.value = null }
 
     private suspend fun persistProgress(completed: Boolean) {
@@ -905,7 +929,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun advancePlaylist(expectedGeneration: Long) {
         if (!PlaybackConfigurationPolicy.isCurrent(expectedGeneration, playbackConfigurationGeneration)) return
-        val list = tracks.value
+        val list = tracks.value.filter { it.folderId == mutableCurrent.value?.folderId }
         val currentTrack = mutableCurrent.value ?: return
         val activeSettings = mutableSettings.value
         if (PlaylistNavigation.restartsCurrentTrack(activeSettings.playlistMode)) {

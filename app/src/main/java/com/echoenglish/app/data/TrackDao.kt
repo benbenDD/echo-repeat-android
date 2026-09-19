@@ -39,6 +39,20 @@ class TrackDao(private val db: AppDatabase) {
         refresh()
     }
 
+    suspend fun moveToFolder(id: Long, folderId: Long?) = withContext(Dispatchers.IO) {
+        db.writableDatabase.update(
+            "tracks",
+            ContentValues().apply {
+                if (folderId == null) putNull("folderId") else put("folderId", folderId)
+            },
+            "id=?",
+            arrayOf(id.toString())
+        )
+        refresh()
+    }
+
+    suspend fun refreshFromDatabase() = withContext(Dispatchers.IO) { refresh() }
+
     suspend fun updateProgress(id: Long, positionMs: Long, segment: Int, playedAt: Long, completed: Boolean) = withContext(Dispatchers.IO) {
         db.writableDatabase.update("tracks", ContentValues().apply {
             put("currentPositionMs", positionMs); put("currentSegment", segment); put("lastPlayedAt", playedAt); put("completed", if (completed) 1 else 0)
@@ -102,13 +116,17 @@ class TrackDao(private val db: AppDatabase) {
         currentPositionMs=getLong(getColumnIndexOrThrow("currentPositionMs")), currentSegment=getInt(getColumnIndexOrThrow("currentSegment")), segmentMode=getString(getColumnIndexOrThrow("segmentMode")),
         segmentSeconds=getInt(getColumnIndexOrThrow("segmentSeconds")), repeatCount=getInt(getColumnIndexOrThrow("repeatCount")), speed=getFloat(getColumnIndexOrThrow("speed")),
         importedAt=getLong(getColumnIndexOrThrow("importedAt")), lastPlayedAt=getLong(getColumnIndexOrThrow("lastPlayedAt")), completed=getInt(getColumnIndexOrThrow("completed"))!=0,
-        sortOrder=getInt(getColumnIndexOrThrow("sortOrder")), available=getInt(getColumnIndexOrThrow("available"))!=0
+        sortOrder=getInt(getColumnIndexOrThrow("sortOrder")), available=getInt(getColumnIndexOrThrow("available"))!=0,
+        folderId=getLongOrNull("folderId")
     )
     private fun Cursor.getStringOrNull(name: String): String? = getColumnIndexOrThrow(name).let { if (isNull(it)) null else getString(it) }
     private fun TrackEntity.values(includeId: Boolean) = ContentValues().apply {
         if(includeId) put("id",id);put("audioUri",audioUri);put("fileName",fileName);put("title",title);put("subtitleUri",subtitleUri);put("subtitleOffsetMs",subtitleOffsetMs);put("durationMs",durationMs)
         put("currentPositionMs",currentPositionMs);put("currentSegment",currentSegment);put("segmentMode",segmentMode);put("segmentSeconds",segmentSeconds);put("repeatCount",repeatCount)
         put("speed",speed);put("importedAt",importedAt);put("lastPlayedAt",lastPlayedAt);put("completed",if(completed)1 else 0);put("sortOrder",sortOrder);put("available",if(available)1 else 0)
+        if (folderId == null) putNull("folderId") else put("folderId", folderId)
     }
+
+    private fun Cursor.getLongOrNull(name: String): Long? = getColumnIndexOrThrow(name).let { if (isNull(it)) null else getLong(it) }
 }
 

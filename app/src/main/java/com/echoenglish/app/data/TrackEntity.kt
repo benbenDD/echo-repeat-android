@@ -18,5 +18,6 @@ data class TrackEntity(
     val lastPlayedAt: Long = 0,
     val completed: Boolean = false,
     val sortOrder: Int = 0,
-    val available: Boolean = true
+    val available: Boolean = true,
+    val folderId: Long? = null
 )

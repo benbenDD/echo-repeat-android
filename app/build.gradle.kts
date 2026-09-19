@@ -9,8 +9,8 @@ android {
         applicationId = "com.echoenglish.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34
-        versionName = "2.0.14"
+        versionCode = 35
+        versionName = "2.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

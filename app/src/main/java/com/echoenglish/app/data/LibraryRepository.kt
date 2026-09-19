@@ -10,7 +10,7 @@ import com.echoenglish.app.util.FilenameMatcher
 class LibraryRepository(private val context: Context, private val dao: TrackDao) {
     data class ImportResult(val audioCount: Int, val matchedCount: Int, val unmatchedAudio: Int, val duplicateCount: Int, val errors: List<String>)
 
-    suspend fun importUris(uris: List<Uri>): ImportResult {
+    suspend fun importUris(uris: List<Uri>, folderId: Long? = null): ImportResult {
         val resolver = context.contentResolver
         val named = uris.distinct().mapNotNull { uri ->
             runCatching { resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -37,7 +37,8 @@ class LibraryRepository(private val context: Context, private val dao: TrackDao)
                 title = audioName.substringBeforeLast('.'),
                 subtitleUri = subtitleUri?.toString(),
                 durationMs = duration,
-                sortOrder = order++
+                sortOrder = order++,
+                folderId = folderId
             ))
         }
 

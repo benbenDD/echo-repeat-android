@@ -59,6 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echoenglish.app.data.TrackEntity
+import com.echoenglish.app.data.PlaylistFolder
 import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackSnapshot
@@ -161,6 +162,7 @@ private fun EchoEnglishUi(
     vm: MainViewModel = viewModel()
 ) {
     val tracks by vm.tracks.collectAsState()
+    val folders by vm.folders.collectAsState()
     val current by vm.current.collectAsState()
     val playback by vm.playback.collectAsState()
     val settings by vm.settings.collectAsState()
@@ -170,12 +172,17 @@ private fun EchoEnglishUi(
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
+    var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var expandedSettingsSection by rememberSaveable { mutableStateOf<String?>(null) }
     val settingsListState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
 
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.importUris(it) }
-    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let(vm::importTree) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
+        vm.importUris(it, selectedFolderId)
+    }
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { vm.importTree(it, selectedFolderId) }
+    }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val context = LocalContext.current
     val overlayPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -213,10 +220,20 @@ private fun EchoEnglishUi(
             when (screen) {
                 Screen.LIBRARY -> LibraryScreen(
                     tracks = tracks,
+                    folders = folders,
+                    selectedFolderId = selectedFolderId,
+                    onSelectFolder = { selectedFolderId = it },
                     onFiles = { importLauncher.launch(arrayOf("audio/*", "application/x-subrip", "text/plain", "application/octet-stream")) },
                     onFolder = { treeLauncher.launch(null) },
                     onOpen = { vm.openTrack(it); screen = Screen.PLAYER },
-                    onDelete = vm::delete
+                    onDelete = vm::delete,
+                    onCreateFolder = vm::createFolder,
+                    onRenameFolder = vm::renameFolder,
+                    onDeleteFolder = {
+                        if (selectedFolderId == it.id) selectedFolderId = null
+                        vm.deleteFolder(it)
+                    },
+                    onMoveTrack = vm::moveTrackToFolder
                 )
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
@@ -270,11 +287,21 @@ private fun RowScope.EchoNavItem(selected: Boolean, onClick: () -> Unit, icon: I
 @Composable
 private fun LibraryScreen(
     tracks: List<TrackEntity>,
+    folders: List<PlaylistFolder>,
+    selectedFolderId: Long?,
+    onSelectFolder: (Long?) -> Unit,
     onFiles: () -> Unit,
     onFolder: () -> Unit,
     onOpen: (TrackEntity) -> Unit,
-    onDelete: (TrackEntity) -> Unit
+    onDelete: (TrackEntity) -> Unit,
+    onCreateFolder: (String) -> Unit,
+    onRenameFolder: (PlaylistFolder, String) -> Unit,
+    onDeleteFolder: (PlaylistFolder) -> Unit,
+    onMoveTrack: (TrackEntity, Long?) -> Unit
 ) {
+    var showCreateFolder by remember { mutableStateOf(false) }
+    val selectedFolder = folders.firstOrNull { it.id == selectedFolderId }
+    val visibleTracks = tracks.filter { it.folderId == selectedFolderId }
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -312,14 +339,28 @@ private fun LibraryScreen(
         }
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("学习列表", fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp)
+            if (selectedFolder != null) {
+                IconButton(onClick = { onSelectFolder(null) }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回全部文件夹", tint = Ink)
+                }
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(selectedFolder?.name ?: "播放列表整理", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.width(8.dp))
             Surface(shape = CircleShape, color = MintLight) {
-                Text("${tracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                Text("${visibleTracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
+            }
+            if (selectedFolder == null) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = { showCreateFolder = true }) {
+                    FolderSymbol(18.dp, Purple)
+                    Spacer(Modifier.width(5.dp))
+                    Text("新建文件夹", color = Purple, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Spacer(Modifier.height(10.dp))
-        if (tracks.isEmpty()) {
+        if (selectedFolder == null && folders.isEmpty() && visibleTracks.isEmpty() || selectedFolder != null && visibleTracks.isEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
                 shape = CardShape,
@@ -331,23 +372,137 @@ private fun LibraryScreen(
                         Box(contentAlignment = Alignment.Center) { MusicSymbol(38.dp, Sky) }
                     }
                     Spacer(Modifier.height(16.dp))
-                    Text("还没有音频", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
+                    Text(if (selectedFolder == null) "还没有音频" else "这个文件夹还是空的", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
                     Spacer(Modifier.height(6.dp))
-                    Text("同时选择 MP3 和 SRT，文件名相近时会自动匹配", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
+                    Text(if (selectedFolder == null) "新建文件夹整理电影、剧集，或直接导入 MP3 和 SRT" else "上方导入的音频和字幕会直接放入“${selectedFolder.name}”", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
                 }
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                items(tracks, key = { it.id }) { track -> TrackCard(track, { onOpen(track) }, { onDelete(track) }) }
+                if (selectedFolder == null && folders.isNotEmpty()) {
+                    item { Text("文件夹", color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                    items(folders, key = { "folder-${it.id}" }) { folder ->
+                        FolderCard(
+                            folder = folder,
+                            trackCount = tracks.count { it.folderId == folder.id },
+                            onOpen = { onSelectFolder(folder.id) },
+                            onRename = { onRenameFolder(folder, it) },
+                            onDelete = { onDeleteFolder(folder) }
+                        )
+                    }
+                    item {
+                        Text("未分类", modifier = Modifier.padding(top = 7.dp), color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                items(visibleTracks, key = { it.id }) { track ->
+                    TrackCard(
+                        track = track,
+                        folders = folders,
+                        onOpen = { onOpen(track) },
+                        onDelete = { onDelete(track) },
+                        onMove = { onMoveTrack(track, it) }
+                    )
+                }
             }
         }
+    }
+    if (showCreateFolder) {
+        FolderNameDialog(
+            title = "新建播放列表文件夹",
+            initialName = "",
+            confirmLabel = "创建",
+            onDismiss = { showCreateFolder = false },
+            onConfirm = { showCreateFolder = false; onCreateFolder(it) }
+        )
     }
 }
 
 @Composable
-private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun FolderCard(
+    folder: PlaylistFolder,
+    trackCount: Int,
+    onOpen: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var rename by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+        color = Color.White,
+        shape = CardShape,
+        border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(modifier = Modifier.size(50.dp), shape = RoundedCornerShape(16.dp), color = YellowLight) {
+                Box(contentAlignment = Alignment.Center) { FolderSymbol(27.dp, Coral) }
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text(folder.name, fontWeight = FontWeight.Black, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("$trackCount 个音频", color = MutedInk, fontSize = 13.sp)
+            }
+            Box {
+                IconButton(onClick = { showMenu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "${folder.name} 的更多操作", tint = MutedInk) }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(text = { Text("重命名") }, onClick = { showMenu = false; rename = true })
+                    DropdownMenuItem(text = { Text("删除文件夹", color = Coral) }, onClick = { showMenu = false; confirmDelete = true })
+                }
+            }
+        }
+    }
+    if (rename) FolderNameDialog("重命名文件夹", folder.name, "保存", { rename = false }) { rename = false; onRename(it) }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            shape = CardShape,
+            title = { Text("删除“${folder.name}”？", fontWeight = FontWeight.Black) },
+            text = { Text("文件夹中的音频会移到“未分类”，手机里的原音频和字幕不会被删除。") },
+            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("删除文件夹", color = Coral, fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
+        )
+    }
+}
+
+@Composable
+private fun FolderNameDialog(
+    title: String,
+    initialName: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = CardShape,
+        title = { Text(title, fontWeight = FontWeight.Black) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                label = { Text("文件夹名称") },
+                placeholder = { Text("例如：电影合集、老友记") }
+            )
+        },
+        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name.trim()) }) { Text(confirmLabel, color = Purple, fontWeight = FontWeight.Bold) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
+private fun TrackCard(
+    track: TrackEntity,
+    folders: List<PlaylistFolder>,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: (Long?) -> Unit
+) {
     var showMenu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showMove by remember { mutableStateOf(false) }
     val hasSubtitle = track.subtitleUri != null
     val badgeColor = if (hasSubtitle) MintLight else CoralLight
     val badgeInk = if (hasSubtitle) Mint else Coral
@@ -375,6 +530,10 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(
+                        text = { Text("移动到文件夹") },
+                        onClick = { showMenu = false; showMove = true }
+                    )
+                    DropdownMenuItem(
                         text = { Text("从播放列表移除", color = Coral, fontWeight = FontWeight.Bold) },
                         onClick = { showMenu = false; confirmDelete = true }
                     )
@@ -392,6 +551,30 @@ private fun TrackCard(track: TrackEntity, onOpen: () -> Unit, onDelete: () -> Un
                 TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("确认移除", color = Coral, fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
+        )
+    }
+    if (showMove) {
+        AlertDialog(
+            onDismissRequest = { showMove = false },
+            shape = CardShape,
+            title = { Text("移动到文件夹", fontWeight = FontWeight.Black) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = { showMove = false; onMove(null) },
+                        enabled = track.folderId != null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("未分类", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
+                    folders.forEach { folder ->
+                        TextButton(
+                            onClick = { showMove = false; onMove(folder.id) },
+                            enabled = track.folderId != folder.id,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(folder.name, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showMove = false }) { Text("取消") } }
         )
     }
 }
