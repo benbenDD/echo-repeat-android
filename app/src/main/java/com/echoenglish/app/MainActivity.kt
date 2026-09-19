@@ -109,7 +109,6 @@ private data class SegmentPickerRow(
 
 enum class Screen { LIBRARY, PLAYER, SETTINGS }
 private enum class SettingsSection { SEGMENTS, PRACTICE, PLAYBACK, DISPLAY }
-private const val UNCLASSIFIED_FOLDER_KEY = -1L
 
 class MainActivity : ComponentActivity() {
     private val openPlayerRequests = MutableStateFlow(0)
@@ -173,16 +172,16 @@ private fun EchoEnglishUi(
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
-    var expandedFolderKey by rememberSaveable { mutableStateOf<Long?>(null) }
+    var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var expandedSettingsSection by rememberSaveable { mutableStateOf<String?>(null) }
     val settingsListState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
-        vm.importUris(it, expandedFolderKey?.takeIf { key -> key > 0L })
+        vm.importUris(it, selectedFolderId)
     }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let { vm.importTree(it, expandedFolderKey?.takeIf { key -> key > 0L }) }
+        uri?.let { vm.importTree(it, selectedFolderId) }
     }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val context = LocalContext.current
@@ -222,8 +221,8 @@ private fun EchoEnglishUi(
                 Screen.LIBRARY -> LibraryScreen(
                     tracks = tracks,
                     folders = folders,
-                    expandedFolderKey = expandedFolderKey,
-                    onExpandedFolderChange = { expandedFolderKey = it },
+                    selectedFolderId = selectedFolderId,
+                    onSelectFolder = { selectedFolderId = it },
                     onFiles = { importLauncher.launch(arrayOf("audio/*", "application/x-subrip", "text/plain", "application/octet-stream")) },
                     onFolder = { treeLauncher.launch(null) },
                     onOpen = { vm.openTrack(it); screen = Screen.PLAYER },
@@ -231,11 +230,10 @@ private fun EchoEnglishUi(
                     onCreateFolder = vm::createFolder,
                     onRenameFolder = vm::renameFolder,
                     onDeleteFolder = {
-                        if (expandedFolderKey == it.id) expandedFolderKey = null
+                        if (selectedFolderId == it.id) selectedFolderId = null
                         vm.deleteFolder(it)
                     },
-                    onMoveTrack = vm::moveTrackToFolder,
-                    onMoveTracks = vm::moveTracksToFolder
+                    onMoveTrack = vm::moveTrackToFolder
                 )
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
@@ -290,8 +288,8 @@ private fun RowScope.EchoNavItem(selected: Boolean, onClick: () -> Unit, icon: I
 private fun LibraryScreen(
     tracks: List<TrackEntity>,
     folders: List<PlaylistFolder>,
-    expandedFolderKey: Long?,
-    onExpandedFolderChange: (Long?) -> Unit,
+    selectedFolderId: Long?,
+    onSelectFolder: (Long?) -> Unit,
     onFiles: () -> Unit,
     onFolder: () -> Unit,
     onOpen: (TrackEntity) -> Unit,
@@ -299,23 +297,11 @@ private fun LibraryScreen(
     onCreateFolder: (String) -> Unit,
     onRenameFolder: (PlaylistFolder, String) -> Unit,
     onDeleteFolder: (PlaylistFolder) -> Unit,
-    onMoveTrack: (TrackEntity, Long?) -> Unit,
-    onMoveTracks: (Set<Long>, Long?) -> Unit
+    onMoveTrack: (TrackEntity, Long?) -> Unit
 ) {
     var showCreateFolder by remember { mutableStateOf(false) }
-    var selectionMode by remember { mutableStateOf(false) }
-    var selectedTrackIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
-    var showBatchMove by remember { mutableStateOf(false) }
-    val activeFolderId = expandedFolderKey?.takeIf { it > 0L }
-    val visibleTracks = when (expandedFolderKey) {
-        null -> emptyList()
-        UNCLASSIFIED_FOLDER_KEY -> tracks.filter { it.folderId == null }
-        else -> tracks.filter { it.folderId == activeFolderId }
-    }
-    LaunchedEffect(expandedFolderKey) {
-        selectionMode = false
-        selectedTrackIds = emptySet()
-    }
+    val selectedFolder = folders.firstOrNull { it.id == selectedFolderId }
+    val visibleTracks = tracks.filter { it.folderId == selectedFolderId }
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -353,45 +339,28 @@ private fun LibraryScreen(
         }
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("播放列表整理", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp)
+            if (selectedFolder != null) {
+                IconButton(onClick = { onSelectFolder(null) }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回全部文件夹", tint = Ink)
+                }
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(selectedFolder?.name ?: "播放列表整理", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.width(8.dp))
             Surface(shape = CircleShape, color = MintLight) {
-                Text("${tracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                Text("${visibleTracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
             }
-            Spacer(Modifier.width(8.dp))
-            TextButton(onClick = { showCreateFolder = true }) {
-                FolderSymbol(18.dp, Purple)
-                Spacer(Modifier.width(5.dp))
-                Text("新建文件夹", color = Purple, fontWeight = FontWeight.Bold)
+            if (selectedFolder == null) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = { showCreateFolder = true }) {
+                    FolderSymbol(18.dp, Purple)
+                    Spacer(Modifier.width(5.dp))
+                    Text("新建文件夹", color = Purple, fontWeight = FontWeight.Bold)
+                }
             }
         }
         Spacer(Modifier.height(10.dp))
-        if (visibleTracks.isNotEmpty()) {
-            if (selectionMode) {
-                Surface(color = PurpleLight, shape = ControlShape, modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("已选 ${selectedTrackIds.size} 项", modifier = Modifier.weight(1f).padding(start = 8.dp), color = Purple, fontWeight = FontWeight.Bold)
-                        TextButton(onClick = {
-                            selectedTrackIds = if (selectedTrackIds.size == visibleTracks.size) emptySet() else visibleTracks.map { it.id }.toSet()
-                        }) { Text(if (selectedTrackIds.size == visibleTracks.size) "取消全选" else "全选") }
-                        TextButton(enabled = selectedTrackIds.isNotEmpty(), onClick = { showBatchMove = true }) {
-                            Text("移动到…", fontWeight = FontWeight.Bold)
-                        }
-                        IconButton(onClick = { selectionMode = false; selectedTrackIds = emptySet() }, modifier = Modifier.size(38.dp)) {
-                            Icon(Icons.Rounded.Close, contentDescription = "退出批量整理", tint = MutedInk)
-                        }
-                    }
-                }
-            } else {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { selectionMode = true }) {
-                        Text("批量整理", color = Purple, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-        }
-        if (folders.isEmpty() && tracks.isEmpty()) {
+        if (selectedFolder == null && folders.isEmpty() && visibleTracks.isEmpty() || selectedFolder != null && visibleTracks.isEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
                 shape = CardShape,
@@ -403,64 +372,36 @@ private fun LibraryScreen(
                         Box(contentAlignment = Alignment.Center) { MusicSymbol(38.dp, Sky) }
                     }
                     Spacer(Modifier.height(16.dp))
-                    Text("还没有音频", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
+                    Text(if (selectedFolder == null) "还没有音频" else "这个文件夹还是空的", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
                     Spacer(Modifier.height(6.dp))
-                    Text("新建文件夹整理电影、剧集，或直接导入 MP3 和 SRT", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
+                    Text(if (selectedFolder == null) "新建文件夹整理电影、剧集，或直接导入 MP3 和 SRT" else "上方导入的音频和字幕会直接放入“${selectedFolder.name}”", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
                 }
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                if (folders.isNotEmpty()) {
+                if (selectedFolder == null && folders.isNotEmpty()) {
                     item { Text("文件夹", color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-                    folders.forEach { folder ->
-                        item(key = "folder-${folder.id}") {
+                    items(folders, key = { "folder-${it.id}" }) { folder ->
                         FolderCard(
                             folder = folder,
                             trackCount = tracks.count { it.folderId == folder.id },
-                            expanded = expandedFolderKey == folder.id,
-                            onOpen = { onExpandedFolderChange(if (expandedFolderKey == folder.id) null else folder.id) },
+                            onOpen = { onSelectFolder(folder.id) },
                             onRename = { onRenameFolder(folder, it) },
                             onDelete = { onDeleteFolder(folder) }
                         )
-                        }
-                        if (expandedFolderKey == folder.id) {
-                            val folderTracks = tracks.filter { it.folderId == folder.id }
-                            if (folderTracks.isEmpty()) item(key = "empty-${folder.id}") {
-                                Text("这个文件夹还是空的；现在导入的文件会放到这里。", modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = MutedInk, fontSize = 13.sp)
-                            }
-                            items(folderTracks, key = { "track-${it.id}" }) { track ->
-                                TrackCard(
-                                    track = track, folders = folders, selectionMode = selectionMode,
-                                    selected = track.id in selectedTrackIds,
-                                    onOpen = { if (selectionMode) selectedTrackIds = selectedTrackIds.toggle(track.id) else onOpen(track) },
-                                    onToggleSelection = { selectedTrackIds = selectedTrackIds.toggle(track.id) },
-                                    onDelete = { onDelete(track) }, onMove = { onMoveTrack(track, it) }
-                                )
-                            }
-                        }
+                    }
+                    item {
+                        Text("未分类", modifier = Modifier.padding(top = 7.dp), color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                item(key = "unclassified-header") {
-                    UnclassifiedFolderCard(
-                        trackCount = tracks.count { it.folderId == null },
-                        expanded = expandedFolderKey == UNCLASSIFIED_FOLDER_KEY,
-                        onOpen = { onExpandedFolderChange(if (expandedFolderKey == UNCLASSIFIED_FOLDER_KEY) null else UNCLASSIFIED_FOLDER_KEY) }
+                items(visibleTracks, key = { it.id }) { track ->
+                    TrackCard(
+                        track = track,
+                        folders = folders,
+                        onOpen = { onOpen(track) },
+                        onDelete = { onDelete(track) },
+                        onMove = { onMoveTrack(track, it) }
                     )
-                }
-                if (expandedFolderKey == UNCLASSIFIED_FOLDER_KEY) {
-                    val uncategorized = tracks.filter { it.folderId == null }
-                    if (uncategorized.isEmpty()) item(key = "empty-unclassified") {
-                        Text("还没有未分类音频。", modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = MutedInk, fontSize = 13.sp)
-                    }
-                    items(uncategorized, key = { "track-${it.id}" }) { track ->
-                        TrackCard(
-                            track = track, folders = folders, selectionMode = selectionMode,
-                            selected = track.id in selectedTrackIds,
-                            onOpen = { if (selectionMode) selectedTrackIds = selectedTrackIds.toggle(track.id) else onOpen(track) },
-                            onToggleSelection = { selectedTrackIds = selectedTrackIds.toggle(track.id) },
-                            onDelete = { onDelete(track) }, onMove = { onMoveTrack(track, it) }
-                        )
-                    }
                 }
             }
         }
@@ -474,29 +415,12 @@ private fun LibraryScreen(
             onConfirm = { showCreateFolder = false; onCreateFolder(it) }
         )
     }
-    if (showBatchMove) {
-        FolderDestinationDialog(
-            folders = folders,
-            currentFolderId = activeFolderId,
-            title = "移动 ${selectedTrackIds.size} 个音频",
-            onDismiss = { showBatchMove = false },
-            onSelect = { destination ->
-                showBatchMove = false
-                onMoveTracks(selectedTrackIds, destination)
-                selectionMode = false
-                selectedTrackIds = emptySet()
-            }
-        )
-    }
 }
-
-private fun Set<Long>.toggle(id: Long): Set<Long> = if (id in this) this - id else this + id
 
 @Composable
 private fun FolderCard(
     folder: PlaylistFolder,
     trackCount: Int,
-    expanded: Boolean,
     onOpen: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit
@@ -519,11 +443,6 @@ private fun FolderCard(
                 Text(folder.name, fontWeight = FontWeight.Black, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("$trackCount 个音频", color = MutedInk, fontSize = 13.sp)
             }
-            Icon(
-                if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                contentDescription = if (expanded) "折叠文件夹" else "展开文件夹",
-                tint = Purple
-            )
             Box {
                 IconButton(onClick = { showMenu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "${folder.name} 的更多操作", tint = MutedInk) }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
@@ -543,32 +462,6 @@ private fun FolderCard(
             confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("删除文件夹", color = Coral, fontWeight = FontWeight.Bold) } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
         )
-    }
-}
-
-@Composable
-private fun UnclassifiedFolderCard(trackCount: Int, expanded: Boolean, onOpen: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
-        color = if (expanded) PurpleLight else Color.White,
-        shape = CardShape,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (expanded) Purple else SoftBorder)
-    ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(modifier = Modifier.size(50.dp), shape = RoundedCornerShape(16.dp), color = SkyLight) {
-                Box(contentAlignment = Alignment.Center) { FolderSymbol(27.dp, Sky) }
-            }
-            Spacer(Modifier.width(13.dp))
-            Column(Modifier.weight(1f)) {
-                Text("未分类", fontWeight = FontWeight.Black, color = Ink)
-                Text("$trackCount 个音频", color = MutedInk, fontSize = 13.sp)
-            }
-            Icon(
-                if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                contentDescription = if (expanded) "折叠未分类" else "展开未分类",
-                tint = Purple
-            )
-        }
     }
 }
 
@@ -600,47 +493,10 @@ private fun FolderNameDialog(
 }
 
 @Composable
-private fun FolderDestinationDialog(
-    folders: List<PlaylistFolder>,
-    currentFolderId: Long?,
-    title: String,
-    onDismiss: () -> Unit,
-    onSelect: (Long?) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = CardShape,
-        title = { Text(title, fontWeight = FontWeight.Black) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(
-                    onClick = { onSelect(null) },
-                    enabled = currentFolderId != null,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("未分类", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
-                folders.forEach { folder ->
-                    TextButton(
-                        onClick = { onSelect(folder.id) },
-                        enabled = currentFolderId != folder.id,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(folder.name, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
-}
-
-@Composable
 private fun TrackCard(
     track: TrackEntity,
     folders: List<PlaylistFolder>,
-    selectionMode: Boolean,
-    selected: Boolean,
     onOpen: () -> Unit,
-    onToggleSelection: () -> Unit,
     onDelete: () -> Unit,
     onMove: (Long?) -> Unit
 ) {
@@ -658,14 +514,6 @@ private fun TrackCard(
         shadowElevation = 1.dp
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (selectionMode) {
-                Checkbox(
-                    checked = selected,
-                    onCheckedChange = { onToggleSelection() },
-                    colors = CheckboxDefaults.colors(checkedColor = Purple)
-                )
-                Spacer(Modifier.width(5.dp))
-            }
             Surface(modifier = Modifier.size(50.dp), shape = RoundedCornerShape(16.dp), color = badgeColor) {
                 Box(contentAlignment = Alignment.Center) { MusicSymbol(27.dp, badgeInk) }
             }
@@ -676,7 +524,7 @@ private fun TrackCard(
                 Text("${formatTime(track.durationMs)} · ${if (hasSubtitle) "字幕已匹配" else "固定时长分段"}", color = MutedInk, fontSize = 13.sp)
                 if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            if (!selectionMode) Box {
+            Box {
                 IconButton(onClick = { showMenu = true }, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = "${track.title} 的更多操作")
                 }
@@ -706,12 +554,27 @@ private fun TrackCard(
         )
     }
     if (showMove) {
-        FolderDestinationDialog(
-            folders = folders,
-            currentFolderId = track.folderId,
-            title = "移动到文件夹",
-            onDismiss = { showMove = false },
-            onSelect = { showMove = false; onMove(it) }
+        AlertDialog(
+            onDismissRequest = { showMove = false },
+            shape = CardShape,
+            title = { Text("移动到文件夹", fontWeight = FontWeight.Black) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = { showMove = false; onMove(null) },
+                        enabled = track.folderId != null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("未分类", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
+                    folders.forEach { folder ->
+                        TextButton(
+                            onClick = { showMove = false; onMove(folder.id) },
+                            enabled = track.folderId != folder.id,
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(folder.name, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showMove = false }) { Text("取消") } }
         )
     }
 }
