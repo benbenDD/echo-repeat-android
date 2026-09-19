@@ -51,6 +51,24 @@ class TrackDao(private val db: AppDatabase) {
         refresh()
     }
 
+    suspend fun moveToFolder(ids: Set<Long>, folderId: Long?) = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext
+        val writable = db.writableDatabase
+        writable.beginTransaction()
+        try {
+            val values = ContentValues().apply {
+                if (folderId == null) putNull("folderId") else put("folderId", folderId)
+            }
+            ids.forEach { id ->
+                writable.update("tracks", values, "id=?", arrayOf(id.toString()))
+            }
+            writable.setTransactionSuccessful()
+        } finally {
+            writable.endTransaction()
+        }
+        refresh()
+    }
+
     suspend fun refreshFromDatabase() = withContext(Dispatchers.IO) { refresh() }
 
     suspend fun updateProgress(id: Long, positionMs: Long, segment: Int, playedAt: Long, completed: Boolean) = withContext(Dispatchers.IO) {

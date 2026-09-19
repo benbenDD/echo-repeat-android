@@ -919,6 +919,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (mutableCurrent.value?.id == track.id) mutableCurrent.value = track.copy(folderId = folderId)
         mutableMessage.value = if (folderId == null) "已移到未分类" else "已移动到文件夹"
     }
+    fun moveTracksToFolder(trackIds: Set<Long>, folderId: Long?) = viewModelScope.launch {
+        dao.moveToFolder(trackIds, folderId)
+        mutableCurrent.value?.takeIf { it.id in trackIds }?.let {
+            mutableCurrent.value = it.copy(folderId = folderId)
+        }
+        mutableMessage.value = if (folderId == null) {
+            "已将 ${trackIds.size} 个音频移到未分类"
+        } else {
+            "已移动 ${trackIds.size} 个音频"
+        }
+    }
     fun clearMessage() { mutableMessage.value = null }
 
     private suspend fun persistProgress(completed: Boolean) {

@@ -233,7 +233,8 @@ private fun EchoEnglishUi(
                         if (selectedFolderId == it.id) selectedFolderId = null
                         vm.deleteFolder(it)
                     },
-                    onMoveTrack = vm::moveTrackToFolder
+                    onMoveTrack = vm::moveTrackToFolder,
+                    onMoveTracks = vm::moveTracksToFolder
                 )
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
@@ -297,11 +298,19 @@ private fun LibraryScreen(
     onCreateFolder: (String) -> Unit,
     onRenameFolder: (PlaylistFolder, String) -> Unit,
     onDeleteFolder: (PlaylistFolder) -> Unit,
-    onMoveTrack: (TrackEntity, Long?) -> Unit
+    onMoveTrack: (TrackEntity, Long?) -> Unit,
+    onMoveTracks: (Set<Long>, Long?) -> Unit
 ) {
     var showCreateFolder by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedTrackIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var showBatchMove by remember { mutableStateOf(false) }
     val selectedFolder = folders.firstOrNull { it.id == selectedFolderId }
     val visibleTracks = tracks.filter { it.folderId == selectedFolderId }
+    LaunchedEffect(selectedFolderId) {
+        selectionMode = false
+        selectedTrackIds = emptySet()
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -360,6 +369,31 @@ private fun LibraryScreen(
             }
         }
         Spacer(Modifier.height(10.dp))
+        if (visibleTracks.isNotEmpty()) {
+            if (selectionMode) {
+                Surface(color = PurpleLight, shape = ControlShape, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("已选 ${selectedTrackIds.size} 项", modifier = Modifier.weight(1f).padding(start = 8.dp), color = Purple, fontWeight = FontWeight.Bold)
+                        TextButton(onClick = {
+                            selectedTrackIds = if (selectedTrackIds.size == visibleTracks.size) emptySet() else visibleTracks.map { it.id }.toSet()
+                        }) { Text(if (selectedTrackIds.size == visibleTracks.size) "取消全选" else "全选") }
+                        TextButton(enabled = selectedTrackIds.isNotEmpty(), onClick = { showBatchMove = true }) {
+                            Text("移动到…", fontWeight = FontWeight.Bold)
+                        }
+                        IconButton(onClick = { selectionMode = false; selectedTrackIds = emptySet() }, modifier = Modifier.size(38.dp)) {
+                            Icon(Icons.Rounded.Close, contentDescription = "退出批量整理", tint = MutedInk)
+                        }
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { selectionMode = true }) {
+                        Text("批量整理", color = Purple, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
         if (selectedFolder == null && folders.isEmpty() && visibleTracks.isEmpty() || selectedFolder != null && visibleTracks.isEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
@@ -398,7 +432,10 @@ private fun LibraryScreen(
                     TrackCard(
                         track = track,
                         folders = folders,
-                        onOpen = { onOpen(track) },
+                        selectionMode = selectionMode,
+                        selected = track.id in selectedTrackIds,
+                        onOpen = { if (selectionMode) selectedTrackIds = selectedTrackIds.toggle(track.id) else onOpen(track) },
+                        onToggleSelection = { selectedTrackIds = selectedTrackIds.toggle(track.id) },
                         onDelete = { onDelete(track) },
                         onMove = { onMoveTrack(track, it) }
                     )
@@ -415,7 +452,23 @@ private fun LibraryScreen(
             onConfirm = { showCreateFolder = false; onCreateFolder(it) }
         )
     }
+    if (showBatchMove) {
+        FolderDestinationDialog(
+            folders = folders,
+            currentFolderId = selectedFolderId,
+            title = "移动 ${selectedTrackIds.size} 个音频",
+            onDismiss = { showBatchMove = false },
+            onSelect = { destination ->
+                showBatchMove = false
+                onMoveTracks(selectedTrackIds, destination)
+                selectionMode = false
+                selectedTrackIds = emptySet()
+            }
+        )
+    }
 }
+
+private fun Set<Long>.toggle(id: Long): Set<Long> = if (id in this) this - id else this + id
 
 @Composable
 private fun FolderCard(
@@ -493,10 +546,47 @@ private fun FolderNameDialog(
 }
 
 @Composable
+private fun FolderDestinationDialog(
+    folders: List<PlaylistFolder>,
+    currentFolderId: Long?,
+    title: String,
+    onDismiss: () -> Unit,
+    onSelect: (Long?) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = CardShape,
+        title = { Text(title, fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = { onSelect(null) },
+                    enabled = currentFolderId != null,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("未分类", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
+                folders.forEach { folder ->
+                    TextButton(
+                        onClick = { onSelect(folder.id) },
+                        enabled = currentFolderId != folder.id,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(folder.name, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
 private fun TrackCard(
     track: TrackEntity,
     folders: List<PlaylistFolder>,
+    selectionMode: Boolean,
+    selected: Boolean,
     onOpen: () -> Unit,
+    onToggleSelection: () -> Unit,
     onDelete: () -> Unit,
     onMove: (Long?) -> Unit
 ) {
@@ -514,6 +604,14 @@ private fun TrackCard(
         shadowElevation = 1.dp
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (selectionMode) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onToggleSelection() },
+                    colors = CheckboxDefaults.colors(checkedColor = Purple)
+                )
+                Spacer(Modifier.width(5.dp))
+            }
             Surface(modifier = Modifier.size(50.dp), shape = RoundedCornerShape(16.dp), color = badgeColor) {
                 Box(contentAlignment = Alignment.Center) { MusicSymbol(27.dp, badgeInk) }
             }
@@ -524,7 +622,7 @@ private fun TrackCard(
                 Text("${formatTime(track.durationMs)} · ${if (hasSubtitle) "字幕已匹配" else "固定时长分段"}", color = MutedInk, fontSize = 13.sp)
                 if (track.currentSegment > 0) Text("上次学到第 ${track.currentSegment + 1} 段", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-            Box {
+            if (!selectionMode) Box {
                 IconButton(onClick = { showMenu = true }, colors = IconButtonDefaults.iconButtonColors(contentColor = MutedInk)) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = "${track.title} 的更多操作")
                 }
@@ -554,27 +652,12 @@ private fun TrackCard(
         )
     }
     if (showMove) {
-        AlertDialog(
-            onDismissRequest = { showMove = false },
-            shape = CardShape,
-            title = { Text("移动到文件夹", fontWeight = FontWeight.Black) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = { showMove = false; onMove(null) },
-                        enabled = track.folderId != null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("未分类", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start) }
-                    folders.forEach { folder ->
-                        TextButton(
-                            onClick = { showMove = false; onMove(folder.id) },
-                            enabled = track.folderId != folder.id,
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text(folder.name, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showMove = false }) { Text("取消") } }
+        FolderDestinationDialog(
+            folders = folders,
+            currentFolderId = track.folderId,
+            title = "移动到文件夹",
+            onDismiss = { showMove = false },
+            onSelect = { showMove = false; onMove(it) }
         )
     }
 }
