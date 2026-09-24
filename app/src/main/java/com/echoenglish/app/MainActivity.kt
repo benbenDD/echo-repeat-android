@@ -22,6 +22,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.MoreVert
@@ -50,8 +52,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -785,6 +789,8 @@ private fun SegmentPickerDialog(
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var subtitleNumberInput by remember { mutableStateOf("") }
+    var requestedSubtitleIndex by remember { mutableStateOf<Int?>(null) }
     val allRows = if (locatorSubtitles.isNotEmpty()) {
         locatorSubtitles.mapIndexed { index, cue ->
             SegmentPickerRow(
@@ -818,8 +824,11 @@ private fun SegmentPickerDialog(
     val initial = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initial)
     val scope = rememberCoroutineScope()
-    LaunchedEffect(bookmarkedOnly, searchQuery) {
-        val target = rows.indexOfFirst { it.selected }.coerceAtLeast(0)
+    val subtitleNumber = subtitleNumberInput.toIntOrNull()
+    val subtitleNumberValid = subtitleNumber != null && subtitleNumber in 1..locatorSubtitles.size
+    LaunchedEffect(bookmarkedOnly, searchQuery, requestedSubtitleIndex) {
+        val target = requestedSubtitleIndex
+            ?: rows.indexOfFirst { it.selected }.coerceAtLeast(0)
         if (rows.isNotEmpty()) listState.scrollToItem(target.coerceAtMost(rows.lastIndex))
     }
     AlertDialog(
@@ -827,13 +836,65 @@ private fun SegmentPickerDialog(
         modifier = Modifier.fillMaxWidth(.92f),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         shape = CardShape,
-        title = { Text("跳转到指定片段", fontWeight = FontWeight.Black) },
+        title = {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("跳转到指定片段", Modifier.weight(1f), fontWeight = FontWeight.Black)
+                if (locatorSubtitles.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier.width(68.dp).height(36.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.White,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            Purple
+                        )
+                    ) {
+                        BasicTextField(
+                            value = subtitleNumberInput,
+                            onValueChange = { value ->
+                                subtitleNumberInput = value.filter(Char::isDigit)
+                                    .take(locatorSubtitles.size.toString().length)
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            textStyle = TextStyle(
+                                color = Ink,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            ),
+                            decorationBox = { innerTextField ->
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    if (subtitleNumberInput.isEmpty()) {
+                                        Text("1～${locatorSubtitles.size}", color = MutedInk, fontSize = 13.sp)
+                                    }
+                                    innerTextField()
+                                }
+                            }
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    TextButton(
+                        enabled = subtitleNumberValid,
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        onClick = {
+                            bookmarkedOnly = false
+                            searchQuery = ""
+                            requestedSubtitleIndex = subtitleNumber!! - 1
+                        }
+                    ) {
+                        Text("定位", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
         text = {
             Column {
                 if (locatorSubtitles.isNotEmpty()) {
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = { searchQuery = it; requestedSubtitleIndex = null },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         singleLine = true,
                         label = { Text("搜索字幕") },
@@ -843,7 +904,7 @@ private fun SegmentPickerDialog(
                         },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
+                                IconButton(onClick = { searchQuery = ""; requestedSubtitleIndex = null }) {
                                     Icon(Icons.Rounded.Close, contentDescription = "清空字幕搜索")
                                 }
                             }
@@ -854,14 +915,14 @@ private fun SegmentPickerDialog(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SubtitleScopeButton(
                         selected = !bookmarkedOnly,
-                        onClick = { bookmarkedOnly = false },
+                        onClick = { bookmarkedOnly = false; requestedSubtitleIndex = null },
                         label = if (locatorSubtitles.isNotEmpty()) "全部字幕" else "全部片段",
                         modifier = Modifier.weight(1f),
                         showBookmarkIcon = false
                     )
                     SubtitleScopeButton(
                         selected = bookmarkedOnly,
-                        onClick = { bookmarkedOnly = true },
+                        onClick = { bookmarkedOnly = true; requestedSubtitleIndex = null },
                         label = "仅看书签",
                         modifier = Modifier.weight(1f),
                         showBookmarkIcon = true
@@ -1318,7 +1379,14 @@ private fun <T> ChoiceGrid(options: List<Pair<String, T>>, selectedValue: T, ena
 
 @Composable
 private fun InfoPill(text: String, background: Color, foreground: Color) {
-    Surface(shape = CircleShape, color = background) { Text(text, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = foreground, fontSize = 12.sp, fontWeight = FontWeight.Black) }
+    Surface(shape = CircleShape, color = background) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text, color = foreground, fontSize = 12.sp, fontWeight = FontWeight.Black)
+        }
+    }
 }
 
 @Composable
