@@ -74,7 +74,7 @@ class SubtitleSearchDao(private val database: AppDatabase) {
                     WHERE $where
                     ORDER BY CASE WHEN s.text LIKE ? ESCAPE '\' THEN 0 ELSE 1 END,
                     t.title COLLATE NOCASE, s.cueOrdinal LIMIT $limit""",
-                args + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                args + (escaped + "%")
             ).use { cursor ->
                 while (cursor.moveToNext()) results += SubtitleSearchResult(
                     cursor.getLong(0), cursor.getString(1),
