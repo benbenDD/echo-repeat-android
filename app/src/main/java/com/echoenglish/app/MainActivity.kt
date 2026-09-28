@@ -946,7 +946,7 @@ private fun SegmentPickerDialog(
                     Row(
                         Modifier.fillMaxWidth().background(if (row.selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
                             .border(if (row.selected) 1.3.dp else 0.dp, if (row.selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
-                            .clickable { onSelect(row.startMs); onDismiss() }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+                            .clickable { onSelect(row.startMs) }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {

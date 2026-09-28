@@ -277,7 +277,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             mutableMessage.value = when {
                 track.durationMs <= 0L -> "无法读取这条音频的时长，请重新导入或更换音频文件"
                 activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES && bookmarkedCueIds.isEmpty() ->
-                    "还没有字幕书签，请先添加书签，或改为播放全部字幕片段"
+                    "当前音频还没有字幕书签。请先添加书签，或在“分段与字幕 → 字幕播放范围”中选择“播放完整时间线”或“仅播放字幕片段”"
                 activeSettings.segmentMode == SegmentMode.SUBTITLE ->
                     "没有找到可播放的字幕，请检查字幕文件，或改用固定时长分段"
                 else -> "没有生成可播放片段，请尝试调整分段方式或分段时长"
@@ -603,7 +603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         bookmarkedCueIds = dao.getBookmarkedCueIds(currentTrack.id)
                         publishLocatorSubtitles()
                         if (bookmarkedCueIds.isEmpty()) {
-                            mutableMessage.value = "当前音频还没有字幕书签，请先在播放页添加书签"
+                            mutableMessage.value = "当前音频还没有字幕书签。请先添加书签，或在“分段与字幕 → 字幕播放范围”中选择“播放完整时间线”或“仅播放字幕片段”"
                             return@withLock
                         }
                     }
