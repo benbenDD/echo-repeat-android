@@ -633,6 +633,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 previous.segmentSeconds != value.segmentSeconds ||
                     previous.segmentMode != value.segmentMode ||
                     previous.subtitlePlaybackScope != value.subtitlePlaybackScope ||
+                    previous.separateSubtitleCues != value.separateSubtitleCues ||
                     paddingChanged
                 )
         ) {
@@ -737,19 +738,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     playableCues,
                     durationMs,
                     value.leadInMs,
-                    value.leadOutMs
+                    value.leadOutMs,
+                    mergeOverlappingCues = !value.separateSubtitleCues
                 ).also { finalSegments ->
                     Log.i(
                         "EchoSegments",
                         "mode=SUBTITLE scope=${value.subtitlePlaybackScope} subtitleOffsetMs=$currentSubtitleOffsetMs " +
-                            "leadInMs=${value.leadInMs} leadOutMs=${value.leadOutMs} " +
+                            "leadInMs=${value.leadInMs} leadOutMs=${value.leadOutMs} separateCues=${value.separateSubtitleCues} " +
                             "originalCues=${originalCues.size} adjustedCues=${currentCues.size} " +
                             "finalSegments=${finalSegments.size} firstOriginal=${originalCues.firstOrNull()} " +
                             "firstFinal=${finalSegments.firstOrNull()}"
                     )
                 }
             } else {
-                Segmenter.fromCues(currentCues, durationMs)
+                Segmenter.fromCues(
+                    currentCues,
+                    durationMs,
+                    mergeOverlappingCues = !value.separateSubtitleCues
+                )
             }
         }
         return Segmenter.fixed(durationMs, value.segmentSeconds * 1000L).map { segment ->
@@ -765,7 +771,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
                     BookmarkSelection.filter(currentCues, bookmarkedCueIds)
                 } else currentCues,
-                durationMs
+                durationMs,
+                mergeOverlappingCues = !value.separateSubtitleCues
             ).isNotEmpty()
 
     private fun readCues(track: TrackEntity): List<SrtCue> = track.subtitleUri?.let { uri ->

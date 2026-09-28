@@ -74,6 +74,7 @@ import com.echoenglish.app.ui.components.RoundedGlyphKind
 import com.echoenglish.app.util.SelectionLogic
 import com.echoenglish.app.util.SubtitleSearch
 import com.echoenglish.app.util.formatTime
+import com.echoenglish.app.util.formatSubtitleTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -950,7 +951,7 @@ private fun SegmentPickerDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("第 ${row.number} 条 · ${formatTime(row.startMs)}–${formatTime(row.endMs)}", color = if (row.selected) Purple else Ink, fontWeight = FontWeight.Bold)
+                            Text("第 ${row.number} 条 · ${formatSubtitleTime(row.startMs)}–${formatSubtitleTime(row.endMs)}", color = if (row.selected) Purple else Ink, fontWeight = FontWeight.Bold)
                             if (row.text.isNotBlank()) Text(row.text, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MutedInk, fontSize = 13.sp)
                             if (row.cueIds.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
                         }
@@ -1147,6 +1148,12 @@ private fun SettingsScreen(
             item { SettingCard("分段方式", RoundedGlyphKind.CUT, Purple, PurpleLight) { ChoiceGrid(listOf("固定时长" to SegmentMode.FIXED, "按字幕" to SegmentMode.SUBTITLE), value.segmentMode) { onChange(value.copy(segmentMode = it)) } } }
             item {
                 val enabled = value.segmentMode == SegmentMode.SUBTITLE
+                SettingCard("字幕分段精细度", RoundedGlyphKind.CUT, Mint, MintLight, enabled, if (enabled) "每条字幕模式会保留原始毫秒时间，并在重叠区中点划分边界" else "仅在按字幕分段时可设置") {
+                    ChoiceGrid(listOf("连续字幕合并" to false, "每条字幕单独分段" to true), value.separateSubtitleCues, enabled) { onChange(value.copy(separateSubtitleCues = it)) }
+                }
+            }
+            item {
+                val enabled = value.segmentMode == SegmentMode.SUBTITLE
                 SettingCard("字幕播放范围", RoundedGlyphKind.SUBTITLES, Pink, PinkLight, enabled, if (enabled) "可跳过字幕之间没有文字的原音频" else "仅在按字幕分段时可设置") {
                     ChoiceGrid(listOf("播放完整时间线" to SubtitlePlaybackScope.FULL_TIMELINE, "仅播放字幕片段" to SubtitlePlaybackScope.CUES_ONLY, "仅播放书签字幕" to SubtitlePlaybackScope.BOOKMARKED_CUES), value.subtitlePlaybackScope, enabled) { onChange(value.copy(subtitlePlaybackScope = it)) }
                 }
@@ -1250,7 +1257,7 @@ private fun segmentSettingsSummary(value: PlaybackSettings, currentTrack: TrackE
         SubtitlePlaybackScope.BOOKMARKED_CUES -> "仅书签字幕"
     }
     return if (value.segmentMode == SegmentMode.SUBTITLE) {
-        "$segment · $playbackScope · $subtitle"
+        "$segment · $playbackScope · ${if (value.separateSubtitleCues) "逐条字幕" else "连续字幕合并"} · $subtitle"
     } else {
         "$segment · $subtitle"
     }

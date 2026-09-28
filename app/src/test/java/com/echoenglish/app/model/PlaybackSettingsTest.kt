@@ -18,6 +18,10 @@ class PlaybackSettingsTest {
         assertEquals(500, settings.leadOutMs)
     }
 
+    @Test fun oldInstallKeepsContinuousSubtitleMergingByDefault() {
+        assertFalse(PlaybackSettings().separateSubtitleCues)
+    }
+
     @Test fun lyricsDisplaysAreOptInAndUnlockedByDefault() {
         val settings = PlaybackSettings()
         assertFalse(settings.floatingLyricsEnabled)

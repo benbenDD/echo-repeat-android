@@ -20,10 +20,15 @@ object Segmenter {
         cues: List<SrtCue>,
         durationMs: Long,
         leadInMs: Long = 300,
-        leadOutMs: Long = 500
+        leadOutMs: Long = 500,
+        mergeOverlappingCues: Boolean = true
     ): List<Segment> {
         if (durationMs <= 0) return emptyList()
-        val mergedCues = cueOnly(cues, durationMs)
+        val mergedCues = cueOnly(
+            cues,
+            durationMs,
+            mergeOverlappingCues = mergeOverlappingCues
+        )
         if (mergedCues.isEmpty()) return emptyList()
         if (mergedCues.size == 1) {
             return listOf(Segment(0, durationMs, mergedCues.single().text))
@@ -56,7 +61,8 @@ object Segmenter {
         cues: List<SrtCue>,
         durationMs: Long,
         leadInMs: Long = 0,
-        leadOutMs: Long = 0
+        leadOutMs: Long = 0,
+        mergeOverlappingCues: Boolean = true
     ): List<Segment> {
         if (durationMs <= 0) return emptyList()
         val normalized = cues.mapNotNull { cue ->
@@ -66,27 +72,30 @@ object Segmenter {
             if (text.isBlank() || end <= start) null else Segment(start, end, text)
         }.sortedWith(compareBy<Segment> { it.startMs }.thenBy { it.endMs })
 
-        val result = mutableListOf<Segment>()
-        normalized.forEach { next ->
-            val previous = result.lastOrNull()
-            if (previous == null || next.startMs > previous.endMs) {
-                result += next
-            } else {
-                val mergedText = listOf(previous.text, next.text)
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .joinToString("\n")
-                result[result.lastIndex] = previous.copy(
-                    endMs = maxOf(previous.endMs, next.endMs),
-                    text = mergedText
-                )
+        val result = if (mergeOverlappingCues) {
+            mutableListOf<Segment>().apply {
+                normalized.forEach { next ->
+                    val previous = lastOrNull()
+                    if (previous == null || next.startMs > previous.endMs) {
+                        add(next)
+                    } else {
+                        val mergedText = listOf(previous.text, next.text)
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                            .joinToString("\n")
+                        this[lastIndex] = previous.copy(
+                            endMs = maxOf(previous.endMs, next.endMs),
+                            text = mergedText
+                        )
+                    }
+                }
             }
-        }
+        } else normalized.toMutableList()
         if (result.isEmpty()) return emptyList()
 
         val before = leadInMs.coerceIn(0L, MAX_CUE_PADDING_MS)
         val after = leadOutMs.coerceIn(0L, MAX_CUE_PADDING_MS)
-        if (before == 0L && after == 0L) return result
+        if (before == 0L && after == 0L && mergeOverlappingCues) return result
 
         val starts = result.map { (it.startMs - before).coerceAtLeast(0L) }.toMutableList()
         val ends = result.map { (it.endMs + after).coerceAtMost(durationMs) }.toMutableList()
@@ -94,9 +103,14 @@ object Segmenter {
         for (index in 0 until result.lastIndex) {
             if (ends[index] > starts[index + 1]) {
                 val originalGap = result[index + 1].startMs - result[index].endMs
-                val sharedBoundary = result[index].endMs + originalGap / 2
-                ends[index] = sharedBoundary
-                starts[index + 1] = sharedBoundary
+                val preferredBoundary = result[index].endMs + originalGap / 2
+                val minimumBoundary = starts[index] + 1
+                val maximumBoundary = ends[index + 1] - 1
+                if (minimumBoundary <= maximumBoundary) {
+                    val sharedBoundary = preferredBoundary.coerceIn(minimumBoundary, maximumBoundary)
+                    ends[index] = sharedBoundary
+                    starts[index + 1] = sharedBoundary
+                }
             }
         }
 

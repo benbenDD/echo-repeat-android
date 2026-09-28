@@ -56,6 +56,24 @@ class SegmenterTest {
         assertEquals(result.first().endMs, result.last().startMs)
     }
 
+    @Test fun fullTimelinePreciseModeKeepsOverlappingSubtitleEntriesSeparate() {
+        val result = Segmenter.fromCues(
+            listOf(
+                SrtCue(1, 1_000, 4_000, "A"),
+                SrtCue(2, 3_000, 5_000, "B"),
+                SrtCue(3, 7_000, 8_000, "C")
+            ),
+            durationMs = 10_000,
+            mergeOverlappingCues = false
+        )
+
+        assertEquals(3, result.size)
+        assertEquals(listOf("A", "B", "C"), result.map { it.text })
+        assertEquals(0, result.first().startMs)
+        assertEquals(10_000, result.last().endMs)
+        assertTrue(result.zipWithNext().all { (previous, next) -> previous.endMs == next.startMs })
+    }
+
     @Test fun normalizeMergesOverlappingRanges() {
         val result = Segmenter.normalize(
             listOf(
@@ -172,6 +190,35 @@ class SegmenterTest {
         assertEquals(700, result.first().startMs)
         assertEquals(4_500, result.first().endMs)
         assertEquals(4_700, result.last().startMs)
+    }
+
+    @Test fun preciseCueModeKeepsTouchingSubtitlesSeparate() {
+        val result = Segmenter.cueOnly(
+            listOf(
+                SrtCue(1, 1_000, 3_250, "A"),
+                SrtCue(2, 3_250, 5_700, "B")
+            ),
+            8_000,
+            mergeOverlappingCues = false
+        )
+        assertEquals(2, result.size)
+        assertEquals(listOf("A", "B"), result.map { it.text })
+        assertEquals(result.first().endMs, result.last().startMs)
+    }
+
+    @Test fun preciseCueModeSplitsAnOverlapWithoutReplayingAudio() {
+        val result = Segmenter.cueOnly(
+            listOf(
+                SrtCue(1, 1_000, 4_000, "A"),
+                SrtCue(2, 3_000, 6_000, "B")
+            ),
+            8_000,
+            mergeOverlappingCues = false
+        )
+        assertEquals(2, result.size)
+        assertEquals(3_500, result.first().endMs)
+        assertEquals(3_500, result.last().startMs)
+        assertEquals(listOf("A", "B"), result.map { it.text })
     }
 
     @Test fun cueOnlyNegativePaddingIsTreatedAsZero() {

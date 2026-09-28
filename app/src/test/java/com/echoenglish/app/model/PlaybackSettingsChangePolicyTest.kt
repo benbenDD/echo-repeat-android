@@ -31,4 +31,15 @@ class PlaybackSettingsChangePolicyTest {
             )
         )
     }
+
+
+    @Test fun changingSubtitleSegmentationPrecisionRebuildsTheCurrentTrack() {
+        val previous = PlaybackSettings(segmentMode = SegmentMode.SUBTITLE)
+        assertTrue(
+            PlaybackSettingsChangePolicy.requiresCurrentTrackValidation(
+                previous,
+                previous.copy(separateSubtitleCues = true)
+            )
+        )
+    }
 }

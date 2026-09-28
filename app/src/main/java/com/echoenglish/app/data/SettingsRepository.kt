@@ -13,6 +13,7 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val MODE = stringPreferencesKey("segment_mode")
         val SUBTITLE_SCOPE = stringPreferencesKey("subtitle_playback_scope")
+        val SEPARATE_SUBTITLE_CUES = booleanPreferencesKey("separate_subtitle_cues")
         val SECONDS = intPreferencesKey("segment_seconds")
         val REPEATS = intPreferencesKey("repeat_count")
         val GAP_MS = longPreferencesKey("segment_gap_ms")
@@ -36,6 +37,7 @@ class SettingsRepository(private val context: Context) {
             subtitlePlaybackScope = runCatching {
                 SubtitlePlaybackScope.valueOf(p[Keys.SUBTITLE_SCOPE] ?: "FULL_TIMELINE")
             }.getOrDefault(SubtitlePlaybackScope.FULL_TIMELINE),
+            separateSubtitleCues = p[Keys.SEPARATE_SUBTITLE_CUES] ?: false,
             segmentSeconds = p[Keys.SECONDS] ?: 15,
             repeatCount = p[Keys.REPEATS] ?: 3,
             segmentGapMs = (p[Keys.GAP_MS] ?: 0L).coerceIn(0L, 5_000L),
@@ -61,6 +63,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun save(value: PlaybackSettings) = context.dataStore.edit { p ->
         p[Keys.MODE] = value.segmentMode.name
         p[Keys.SUBTITLE_SCOPE] = value.subtitlePlaybackScope.name
+        p[Keys.SEPARATE_SUBTITLE_CUES] = value.separateSubtitleCues
         p[Keys.SECONDS] = value.segmentSeconds
         p[Keys.REPEATS] = value.repeatCount
         p[Keys.GAP_MS] = value.segmentGapMs.coerceIn(0L, 5_000L)

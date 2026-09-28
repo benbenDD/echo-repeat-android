@@ -11,6 +11,7 @@ enum class FloatingLyricsColor { ORANGE, GREEN, WHITE }
 data class PlaybackSettings(
     val segmentMode: SegmentMode = SegmentMode.FIXED,
     val subtitlePlaybackScope: SubtitlePlaybackScope = SubtitlePlaybackScope.FULL_TIMELINE,
+    val separateSubtitleCues: Boolean = false,
     val segmentSeconds: Int = 15,
     val repeatCount: Int = 3,
     val segmentGapMs: Long = 0,
