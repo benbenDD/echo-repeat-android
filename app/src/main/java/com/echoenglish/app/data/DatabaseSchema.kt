@@ -1,7 +1,7 @@
 package com.echoenglish.app.data
 
 object DatabaseSchema {
-    const val VERSION = 4
+    const val VERSION = 5
     const val MIGRATION_1_TO_2 =
         "ALTER TABLE tracks ADD COLUMN subtitleOffsetMs INTEGER NOT NULL DEFAULT 0"
     const val MIGRATION_2_TO_3 = """CREATE TABLE subtitle_bookmarks (
@@ -18,5 +18,21 @@ object DatabaseSchema {
             sortOrder INTEGER NOT NULL
         )""",
         "ALTER TABLE tracks ADD COLUMN folderId INTEGER"
+    )
+    val MIGRATION_4_TO_5 = listOf(
+        """CREATE TABLE subtitle_search (
+            trackId INTEGER NOT NULL,
+            cueOrdinal INTEGER NOT NULL,
+            cueId INTEGER NOT NULL,
+            startMs INTEGER NOT NULL,
+            endMs INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (trackId, cueOrdinal)
+        )""",
+        "CREATE INDEX subtitle_search_track ON subtitle_search(trackId)",
+        """CREATE TABLE subtitle_search_state (
+            trackId INTEGER PRIMARY KEY,
+            subtitleUri TEXT NOT NULL
+        )"""
     )
 }

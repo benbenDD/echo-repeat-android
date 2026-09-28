@@ -7,13 +7,14 @@ import org.junit.Test
 
 class DatabaseSchemaTest {
     @Test fun databaseVersionIncludesPlaylistFolderMigration() {
-        assertEquals(4, DatabaseSchema.VERSION)
+        assertEquals(5, DatabaseSchema.VERSION)
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("ADD COLUMN subtitleOffsetMs"))
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("DEFAULT 0"))
         assertTrue(DatabaseSchema.MIGRATION_2_TO_3.contains("CREATE TABLE subtitle_bookmarks"))
         assertTrue(DatabaseSchema.MIGRATION_2_TO_3.contains("PRIMARY KEY (trackId, cueIndex)"))
         assertTrue(DatabaseSchema.MIGRATION_3_TO_4.first().contains("CREATE TABLE playlist_folders"))
         assertTrue(DatabaseSchema.MIGRATION_3_TO_4.last().contains("ADD COLUMN folderId"))
+        assertTrue(DatabaseSchema.MIGRATION_4_TO_5.first().contains("CREATE TABLE subtitle_search"))
     }
 
     @Test fun oldTracksDefaultToZeroSubtitleOffset() {

@@ -14,6 +14,8 @@ import com.echoenglish.app.EchoEnglishApp
 import com.echoenglish.app.data.LibraryRepository
 import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.data.PlaylistFolder
+import com.echoenglish.app.data.SubtitleSearchIndexer
+import com.echoenglish.app.data.SubtitleSearchResult
 import com.echoenglish.app.model.PlaybackSettings
 import com.echoenglish.app.model.PlaybackSettingsChangePolicy
 import com.echoenglish.app.model.PlaylistMode
@@ -46,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -53,6 +56,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as EchoEnglishApp
     private val dao = app.database.trackDao
     private val library = LibraryRepository(app, dao)
+    private val subtitleSearchDao = app.database.subtitleSearchDao
+    private val subtitleSearchIndexer = SubtitleSearchIndexer(app, subtitleSearchDao)
+    private val mutableSearchResults = MutableStateFlow<List<SubtitleSearchResult>>(emptyList())
+    val searchResults = mutableSearchResults.asStateFlow()
+    private val mutableSearchIndexing = MutableStateFlow(false)
+    val searchIndexing = mutableSearchIndexing.asStateFlow()
+    private var searchJob: Job? = null
     val tracks = dao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val folderDao = app.database.folderDao
     val folders = folderDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -82,6 +92,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var foregroundRecoveryPending = false
 
     init {
+        viewModelScope.launch {
+            mutableSearchIndexing.value = true
+            subtitleSearchIndexer.updateAll(dao.getAll())
+            mutableSearchIndexing.value = false
+        }
         viewModelScope.launch {
             var startupRestorePending = true
             app.settingsRepository.settings.collect { value ->
@@ -127,7 +142,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun importUris(uris: List<Uri>, folderId: Long? = null) = viewModelScope.launch {
         mutableMessage.value = "正在导入…"
         val result = library.importUris(uris, folderId)
+        mutableSearchIndexing.value = true
+        subtitleSearchIndexer.updateAll(dao.getAll())
+        mutableSearchIndexing.value = false
         mutableMessage.value = "已导入 ${result.audioCount} 个音频，匹配 ${result.matchedCount} 个字幕，重复 ${result.duplicateCount} 个"
+    }
+
+    fun searchSubtitles(query: String, folderId: Long?, trackId: Long?) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            delay(180)
+            mutableSearchResults.value = subtitleSearchDao.search(query, folderId, trackId)
+        }
+    }
+
+    fun openSearchResult(result: SubtitleSearchResult) {
+        val generation = ++playbackConfigurationGeneration
+        viewModelScope.launch {
+            val track = dao.getById(result.trackId) ?: return@launch
+            val selectedSettings = mutableSettings.value
+            val activeSettings = if (
+                selectedSettings.segmentMode == SegmentMode.SUBTITLE &&
+                selectedSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES
+            ) {
+                mutableMessage.value = "搜索结果可能不在书签中，本次临时按全部字幕片段播放"
+                selectedSettings.copy(subtitlePlaybackScope = SubtitlePlaybackScope.CUES_ONLY)
+            } else selectedSettings
+            if (!prepareTrack(track, activeSettings)) return@launch
+            if (!PlaybackConfigurationPolicy.isCurrent(generation, playbackConfigurationGeneration)) return@launch
+            mutableCurrent.value = track
+            app.settingsRepository.saveLastTrack(track.id)
+            val target = (result.startMs + track.subtitleOffsetMs).coerceIn(0L, track.durationMs)
+            sendTrackLoad(
+                track,
+                activeSettings,
+                PlaybackRestoreLoadState(
+                    positionMs = target,
+                    segmentIndex = 0,
+                    repeatIndex = 1,
+                    autoPlay = true,
+                    restoreExactPosition = true
+                )
+            )
+        }
     }
 
     fun importTree(uri: Uri, folderId: Long? = null) = viewModelScope.launch {

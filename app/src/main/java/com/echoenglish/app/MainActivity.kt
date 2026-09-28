@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -52,6 +53,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,6 +69,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echoenglish.app.data.TrackEntity
 import com.echoenglish.app.data.PlaylistFolder
+import com.echoenglish.app.data.SubtitleSearchResult
 import com.echoenglish.app.model.*
 import com.echoenglish.app.playback.PlaybackContract
 import com.echoenglish.app.playback.PlaybackSnapshot
@@ -112,7 +118,8 @@ private data class SegmentPickerRow(
     val selected: Boolean
 )
 
-enum class Screen { LIBRARY, PLAYER, SETTINGS }
+enum class Screen { LIBRARY, SEARCH, PLAYER, SETTINGS }
+private enum class SearchScope { ALL, FOLDER, TRACK }
 private enum class SettingsSection { SEGMENTS, PRACTICE, PLAYBACK, DISPLAY }
 
 class MainActivity : ComponentActivity() {
@@ -174,13 +181,27 @@ private fun EchoEnglishUi(
     val message by vm.message.collectAsState()
     val startupRestoredTrackId by vm.startupRestoredTrackId.collectAsState()
     val locatorSubtitles by vm.locatorSubtitles.collectAsState()
+    val searchResults by vm.searchResults.collectAsState()
+    val searchIndexing by vm.searchIndexing.collectAsState()
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchScope by rememberSaveable { mutableStateOf(SearchScope.ALL) }
+    var searchFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var searchTrackId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var returnToSearch by remember { mutableStateOf(false) }
     var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var expandedSettingsSection by rememberSaveable { mutableStateOf<String?>(null) }
     val settingsListState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(searchQuery, searchScope, searchFolderId, searchTrackId, searchIndexing) {
+        vm.searchSubtitles(
+            searchQuery,
+            if (searchScope == SearchScope.FOLDER) searchFolderId else null,
+            if (searchScope == SearchScope.TRACK) searchTrackId else null
+        )
+    }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         vm.importUris(it, selectedFolderId)
@@ -215,7 +236,7 @@ private fun EchoEnglishUi(
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
-                EchoNavItem(screen == Screen.LIBRARY, { screen = Screen.LIBRARY }, Icons.AutoMirrored.Rounded.List, "播放列表")
+                EchoNavItem(screen == Screen.LIBRARY || screen == Screen.SEARCH, { screen = Screen.LIBRARY }, Icons.AutoMirrored.Rounded.List, "播放列表")
                 EchoNavItem(screen == Screen.PLAYER, { screen = Screen.PLAYER }, Icons.Rounded.PlayArrow, "复读")
                 EchoNavItem(screen == Screen.SETTINGS, { screen = Screen.SETTINGS }, Icons.Rounded.Settings, "设置")
             }
@@ -230,7 +251,7 @@ private fun EchoEnglishUi(
                     onSelectFolder = { selectedFolderId = it },
                     onFiles = { importLauncher.launch(arrayOf("audio/*", "application/x-subrip", "text/plain", "application/octet-stream")) },
                     onFolder = { treeLauncher.launch(null) },
-                    onOpen = { vm.openTrack(it); screen = Screen.PLAYER },
+                    onOpen = { returnToSearch = false; vm.openTrack(it); screen = Screen.PLAYER },
                     onDelete = vm::delete,
                     onCreateFolder = vm::createFolder,
                     onRenameFolder = vm::renameFolder,
@@ -238,7 +259,29 @@ private fun EchoEnglishUi(
                         if (selectedFolderId == it.id) selectedFolderId = null
                         vm.deleteFolder(it)
                     },
-                    onMoveTrack = vm::moveTrackToFolder
+                    onMoveTrack = vm::moveTrackToFolder,
+                    onSearch = {
+                        searchFolderId = selectedFolderId
+                        searchTrackId = current?.id
+                        searchScope = SearchScope.ALL
+                        screen = Screen.SEARCH
+                    }
+                )
+                Screen.SEARCH -> SubtitleSearchScreen(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    scope = searchScope,
+                    onScopeChange = { searchScope = it },
+                    folderName = folders.firstOrNull { it.id == searchFolderId }?.name,
+                    trackName = tracks.firstOrNull { it.id == searchTrackId }?.title,
+                    results = searchResults,
+                    indexing = searchIndexing,
+                    onBack = { screen = Screen.LIBRARY },
+                    onOpen = {
+                        returnToSearch = true
+                        vm.openSearchResult(it)
+                        screen = Screen.PLAYER
+                    }
                 )
                 Screen.PLAYER -> PlayerScreen(
                     title = current?.title ?: playback.title,
@@ -250,7 +293,7 @@ private fun EchoEnglishUi(
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
-                    onLibrary = { screen = Screen.LIBRARY }
+                    onLibrary = { screen = if (returnToSearch) Screen.SEARCH else Screen.LIBRARY }
                 )
                 Screen.SETTINGS -> SettingsScreen(
                     value = settings,
@@ -291,6 +334,125 @@ private fun RowScope.EchoNavItem(selected: Boolean, onClick: () -> Unit, icon: I
 }
 
 @Composable
+private fun SubtitleSearchScreen(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    scope: SearchScope,
+    onScopeChange: (SearchScope) -> Unit,
+    folderName: String?,
+    trackName: String?,
+    results: List<SubtitleSearchResult>,
+    indexing: Boolean,
+    onBack: () -> Unit,
+    onOpen: (SubtitleSearchResult) -> Unit
+) {
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回播放列表", tint = Ink)
+            }
+            Text("搜索字幕", fontSize = 23.sp, fontWeight = FontWeight.Black, color = Ink)
+        }
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("台词或关键词") },
+            placeholder = { Text("输入记得的一句话或词语") },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "清空搜索")
+                }
+            },
+            shape = ControlShape
+        )
+        if (folderName != null || trackName != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = scope == SearchScope.ALL,
+                    onClick = { onScopeChange(SearchScope.ALL) },
+                    label = { Text("全部播放列表") }
+                )
+                if (folderName != null) FilterChip(
+                    selected = scope == SearchScope.FOLDER,
+                    onClick = { onScopeChange(SearchScope.FOLDER) },
+                    label = { Text("当前文件夹") }
+                )
+            }
+            if (trackName != null) {
+                FilterChip(
+                    selected = scope == SearchScope.TRACK,
+                    onClick = { onScopeChange(SearchScope.TRACK) },
+                    label = { Text("当前音频：$trackName", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
+        } else Spacer(Modifier.height(10.dp))
+        if (indexing) Text("正在整理已导入的字幕…", color = MutedInk, fontSize = 13.sp)
+        if (query.isNotBlank()) {
+            Text("找到 ${results.size} 条字幕${if (results.size == 300) "（仅显示前300条）" else ""}", color = MutedInk, fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
+        }
+        if (query.isBlank() || results.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text(
+                    if (query.isBlank()) "输入关键词，查找所有已导入音频的字幕"
+                    else if (indexing) "正在建立搜索索引…" else "没有找到相关字幕",
+                    color = MutedInk,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+                contentPadding = PaddingValues(bottom = 18.dp)
+            ) {
+                items(results, key = { "${it.trackId}-${it.cueOrdinal}" }) { result ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable { onOpen(result) },
+                        shape = CardShape,
+                        color = Color.White,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(result.trackTitle, color = Ink, fontWeight = FontWeight.Black,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "第 ${result.cueOrdinal} 条 · ${formatSubtitleTime(result.startMs)}" +
+                                    (result.folderName?.let { " · $it" } ?: ""),
+                                color = Purple, fontSize = 12.sp
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(highlightSearchMatch(result.text, query), color = MutedInk,
+                                fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun highlightSearchMatch(text: String, query: String): AnnotatedString = buildAnnotatedString {
+    val term = query.trim()
+    if (term.isEmpty()) { append(text); return@buildAnnotatedString }
+    var cursor = 0
+    while (cursor < text.length) {
+        val next = text.indexOf(term, cursor, ignoreCase = true)
+        if (next < 0) { append(text.substring(cursor)); break }
+        append(text.substring(cursor, next))
+        withStyle(SpanStyle(color = Purple, fontWeight = FontWeight.Black)) {
+            append(text.substring(next, next + term.length))
+        }
+        cursor = next + term.length
+    }
+}
+
+@Composable
 private fun LibraryScreen(
     tracks: List<TrackEntity>,
     folders: List<PlaylistFolder>,
@@ -303,7 +465,8 @@ private fun LibraryScreen(
     onCreateFolder: (String) -> Unit,
     onRenameFolder: (PlaylistFolder, String) -> Unit,
     onDeleteFolder: (PlaylistFolder) -> Unit,
-    onMoveTrack: (TrackEntity, Long?) -> Unit
+    onMoveTrack: (TrackEntity, Long?) -> Unit,
+    onSearch: () -> Unit
 ) {
     var showCreateFolder by remember { mutableStateOf(false) }
     val selectedFolder = folders.firstOrNull { it.id == selectedFolderId }
@@ -320,6 +483,18 @@ private fun LibraryScreen(
             }
         }
         Spacer(Modifier.height(18.dp))
+        OutlinedButton(
+            onClick = onSearch,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = ControlShape,
+            border = androidx.compose.foundation.BorderStroke(1.dp, Purple),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Purple)
+        ) {
+            Icon(Icons.Rounded.Search, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("搜索所有音频中的字幕", fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onFiles,

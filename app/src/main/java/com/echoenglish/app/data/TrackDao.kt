@@ -99,6 +99,8 @@ class TrackDao(private val db: AppDatabase) {
 
     suspend fun delete(track: TrackEntity) = withContext(Dispatchers.IO) {
         db.writableDatabase.delete("subtitle_bookmarks", "trackId=?", arrayOf(track.id.toString()))
+        db.writableDatabase.delete("subtitle_search", "trackId=?", arrayOf(track.id.toString()))
+        db.writableDatabase.delete("subtitle_search_state", "trackId=?", arrayOf(track.id.toString()))
         db.writableDatabase.delete("tracks", "id=?", arrayOf(track.id.toString())); refresh()
     }
 
