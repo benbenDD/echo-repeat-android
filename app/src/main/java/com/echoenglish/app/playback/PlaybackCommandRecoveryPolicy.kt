@@ -19,6 +19,8 @@ object PlaybackCommandRecoveryPolicy {
         return when (action) {
             PlaybackContract.ACTION_TOGGLE ->
                 PlaybackCommandRecoveryDecision.Recover(autoPlay = true)
+            PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY ->
+                PlaybackCommandRecoveryDecision.Recover(autoPlay = true)
             PlaybackContract.ACTION_SEEK,
             PlaybackContract.ACTION_SEEK_ABSOLUTE,
             PlaybackContract.ACTION_SEEK_SEGMENT,

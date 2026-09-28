@@ -340,6 +340,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun seekAbsolute(positionMs: Long) = command(PlaybackContract.ACTION_SEEK_ABSOLUTE, positionMs)
 
+    fun seekAbsoluteAndPlay(positionMs: Long) =
+        command(PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY, positionMs)
+
     fun seekToSegment(index: Int) {
         viewModelScope.launch {
             playbackCommandMutex.withLock {
@@ -513,6 +516,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 segmentIndex = safeIndex,
                 repeatIndex = 1,
                 autoPlay = false
+            )
+            PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY -> savedState.copy(
+                positionMs = (position ?: safePosition).coerceIn(0L, track.durationMs),
+                segmentIndex = safeIndex,
+                repeatIndex = 1,
+                autoPlay = true
             )
             PlaybackContract.ACTION_SEEK_SEGMENT -> {
                 val targetIndex = (requestedSegmentIndex ?: safeIndex)

@@ -246,6 +246,7 @@ private fun EchoEnglishUi(
                     locatorSubtitles = locatorSubtitles,
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
+                    onSeekAbsoluteAndPlay = vm::seekAbsoluteAndPlay,
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
@@ -591,6 +592,7 @@ private fun PlayerScreen(
     locatorSubtitles: List<SubtitleSnapshot>,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
+    onSeekAbsoluteAndPlay: (Long) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit,
     onTimer: (Int) -> Unit,
@@ -689,7 +691,18 @@ private fun PlayerScreen(
         }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
-    if (showSegments) SegmentPickerDialog(state, locatorSubtitles, { showSegments = false }, onSeekAbsolute, onToggleBookmarks)
+    if (showSegments) {
+        SegmentPickerDialog(
+            state,
+            locatorSubtitles,
+            { showSegments = false },
+            { positionMs ->
+                if (state.isPlaying) onSeekAbsoluteAndPlay(positionMs)
+                else onSeekAbsolute(positionMs)
+            },
+            onToggleBookmarks
+        )
+    }
 }
 
 @Composable

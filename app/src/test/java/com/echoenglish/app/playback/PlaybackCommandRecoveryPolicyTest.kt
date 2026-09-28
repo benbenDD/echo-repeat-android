@@ -4,6 +4,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PlaybackCommandRecoveryPolicyTest {
+    @Test fun locatorSeekRecoversMissingSourceAndStartsPlayback() {
+        assertEquals(
+            PlaybackCommandRecoveryDecision.Recover(autoPlay = true),
+            PlaybackCommandRecoveryPolicy.decide(
+                PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY,
+                sourceReady = false,
+                hasSelectedTrack = true
+            )
+        )
+    }
+
     @Test fun readySourceDispatchesWithoutReload() {
         assertEquals(
             PlaybackCommandRecoveryDecision.Dispatch,

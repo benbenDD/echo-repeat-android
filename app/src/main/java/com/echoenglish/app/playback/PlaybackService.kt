@@ -339,6 +339,10 @@ class PlaybackService : MediaSessionService() {
             PlaybackContract.ACTION_RESTART -> moveTo(segmentIndex)
             PlaybackContract.ACTION_SEEK -> seekWithin(intent.getLongExtra(PlaybackContract.EXTRA_POSITION, 0))
             PlaybackContract.ACTION_SEEK_ABSOLUTE -> seekAbsolute(intent.getLongExtra(PlaybackContract.EXTRA_POSITION, 0))
+            PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY -> seekAbsolute(
+                intent.getLongExtra(PlaybackContract.EXTRA_POSITION, 0),
+                forcePlay = true
+            )
             PlaybackContract.ACTION_SEEK_SEGMENT -> moveTo(intent.getIntExtra(PlaybackContract.EXTRA_INDEX, segmentIndex))
             PlaybackContract.ACTION_UPDATE_SEGMENTS -> updateSegments(intent)
             PlaybackContract.ACTION_UPDATE_BOOKMARKS -> updateBookmarks(intent)
@@ -1264,9 +1268,9 @@ class PlaybackService : MediaSessionService() {
         publish()
     }
 
-    private fun seekAbsolute(positionMs: Long) {
+    private fun seekAbsolute(positionMs: Long, forcePlay: Boolean = false) {
         if (starts.isEmpty()) return
-        val continuePlaying = effectiveIsPlaying()
+        val continuePlaying = forcePlay || effectiveIsPlaying()
         cancelAutomatedWork(clearGap = true)
         val target = PlaybackMath.snapToPlayablePosition(
             starts,

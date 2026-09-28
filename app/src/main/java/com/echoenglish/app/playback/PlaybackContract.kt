@@ -9,6 +9,7 @@ object PlaybackContract {
     const val ACTION_RESTART = "com.echoenglish.RESTART_SEGMENT"
     const val ACTION_SEEK = "com.echoenglish.SEEK_SEGMENT_RELATIVE"
     const val ACTION_SEEK_ABSOLUTE = "com.echoenglish.SEEK_ABSOLUTE"
+    const val ACTION_SEEK_ABSOLUTE_AND_PLAY = "com.echoenglish.SEEK_ABSOLUTE_AND_PLAY"
     const val ACTION_SEEK_SEGMENT = "com.echoenglish.SEEK_SEGMENT"
     const val ACTION_UPDATE_SEGMENTS = "com.echoenglish.UPDATE_SEGMENTS"
     const val ACTION_UPDATE_BOOKMARKS = "com.echoenglish.UPDATE_BOOKMARKS"
