@@ -163,9 +163,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val selectedSettings = mutableSettings.value
             val activeSettings = if (
                 selectedSettings.segmentMode == SegmentMode.SUBTITLE &&
-                selectedSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES
+                selectedSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES &&
+                result.cueId !in dao.getBookmarkedCueIds(track.id)
             ) {
-                mutableMessage.value = "搜索结果可能不在书签中，本次临时按全部字幕片段播放"
+                mutableMessage.value = "这条字幕未加书签，本次暂按全部字幕片段定位；书签播放设置不变"
                 selectedSettings.copy(subtitlePlaybackScope = SubtitlePlaybackScope.CUES_ONLY)
             } else selectedSettings
             if (!prepareTrack(track, activeSettings)) return@launch
@@ -180,7 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     positionMs = target,
                     segmentIndex = 0,
                     repeatIndex = 1,
-                    autoPlay = true,
+                    autoPlay = false,
                     restoreExactPosition = true
                 )
             )
