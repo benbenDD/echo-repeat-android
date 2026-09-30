@@ -176,7 +176,7 @@ class PlaybackService : MediaSessionService() {
                         diagnostics.record(
                             "is_playing_changed value=$isPlaying state=$playbackState " +
                                 "playWhenReady=${player.playWhenReady} phase=${phaseName()} " +
-                                "segment=$segmentIndex repeat=$repeatIndex"
+                                "segment=$segmentIndex repeat=$repeatIndex volume=${player.volume}"
                         )
                         if (isPlaying) {
                             if (gapWakeLockAwaitingPlayback) {
@@ -409,7 +409,8 @@ class PlaybackService : MediaSessionService() {
         override fun play() = handlePlayRequest()
         override fun pause() = handlePauseRequest()
         override fun isPlaying(): Boolean = effectiveIsPlaying()
-        override fun getPlayWhenReady(): Boolean = effectiveIsPlaying()
+        override fun getPlayWhenReady(): Boolean =
+            if (isInSegmentGap) !isSegmentGapPaused else player.playWhenReady
         override fun getCurrentPosition(): Long = absolutePositionMs()
         override fun getContentPosition(): Long = absolutePositionMs()
         override fun getDuration(): Long = durationMs()
@@ -1309,6 +1310,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePlayRequest() {
+        diagnostics.record(
+            "session_play phase=${phaseName()} state=${player.playbackState} " +
+                "playWhenReady=${player.playWhenReady} volume=${player.volume}"
+        )
         cancelPlaylistHandoff()
         playbackTaskActive = true
         stopReason = PlaybackStopReason.NONE
@@ -1326,6 +1331,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handlePauseRequest() {
+        diagnostics.record(
+            "session_pause phase=${phaseName()} state=${player.playbackState} " +
+                "playWhenReady=${player.playWhenReady} volume=${player.volume}"
+        )
         cancelPlaylistHandoff()
         playbackTaskActive = false
         if (isInSegmentGap) pauseGap() else player.pause()
