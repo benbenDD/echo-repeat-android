@@ -4,6 +4,8 @@ enum class SegmentBoundaryAction { REPEAT_CURRENT, NEXT_SEGMENT, COMPLETE }
 
 object SegmentPlaybackPolicy {
     const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
+    const val CLIPPED_END_STALL_MARGIN_MS = 150L
+    const val CLIPPED_END_STALL_TIMEOUT_MS = 2_000L
     private const val GAP_WAKE_LOCK_FINISH_MARGIN_MS = 30_000L
 
     fun previousTargetIndex(currentIndex: Int, positionInSegmentMs: Long): Int =
@@ -124,6 +126,15 @@ object SegmentPlaybackPolicy {
         }
 
     fun normalizedGapMs(value: Long): Long = value.coerceIn(0L, 5_000L)
+
+    fun shouldRecoverClippedEndStall(
+        isPlaying: Boolean,
+        isPipelineClipped: Boolean,
+        remainingMs: Long,
+        unchangedForMs: Long
+    ): Boolean = isPlaying && isPipelineClipped &&
+        remainingMs in 0L..CLIPPED_END_STALL_MARGIN_MS &&
+        unchangedForMs >= CLIPPED_END_STALL_TIMEOUT_MS
 
     fun gapWakeLockTimeoutMs(gapDurationMs: Long): Long =
         gapDurationMs.coerceAtLeast(0L) + GAP_WAKE_LOCK_FINISH_MARGIN_MS

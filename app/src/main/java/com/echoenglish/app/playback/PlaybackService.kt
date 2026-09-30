@@ -112,6 +112,9 @@ class PlaybackService : MediaSessionService() {
     private var pendingGapAction: SegmentBoundaryAction? = null
     private var gapWakeLockAwaitingPlayback = false
     private var lastNotificationDiagnostic = ""
+    private var nearClippedEndPositionMs = -1L
+    private var nearClippedEndSegmentIndex = -1
+    private var nearClippedEndSinceElapsedMs = 0L
 
     private data class BoundaryToken(
         val generation: Long,
@@ -870,8 +873,13 @@ class PlaybackService : MediaSessionService() {
                 (gapDeadlineElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0)
             }
         }
+        val position = absolutePositionMs()
+        if (recoverStalledClippedEnd(position)) {
+            publish()
+            persistPlaybackSession()
+            return
+        }
         if (player.isPlaying && !isInSegmentGap && ends.isNotEmpty()) {
-            val position = absolutePositionMs()
             if (!isPipelineClipped) {
                 val naturalIndex = PlaybackMath.segmentIndexAt(starts, ends, position)
                 if (naturalIndex != segmentIndex) {
@@ -892,6 +900,41 @@ class PlaybackService : MediaSessionService() {
         }
         publish()
         persistPlaybackSession()
+    }
+
+    private fun recoverStalledClippedEnd(positionMs: Long): Boolean {
+        val remainingMs = playbackWindowEndMs - positionMs
+        if (!player.isPlaying || isInSegmentGap || !isPipelineClipped ||
+            remainingMs !in 0L..SegmentPlaybackPolicy.CLIPPED_END_STALL_MARGIN_MS
+        ) {
+            nearClippedEndSinceElapsedMs = 0L
+            return false
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (nearClippedEndPositionMs != positionMs || nearClippedEndSegmentIndex != segmentIndex) {
+            nearClippedEndPositionMs = positionMs
+            nearClippedEndSegmentIndex = segmentIndex
+            nearClippedEndSinceElapsedMs = now
+            return false
+        }
+        if (SegmentPlaybackPolicy.shouldRecoverClippedEndStall(
+                isPlaying = player.isPlaying,
+                isPipelineClipped = isPipelineClipped,
+                remainingMs = remainingMs,
+                unchangedForMs = now - nearClippedEndSinceElapsedMs
+            )
+        ) {
+            diagnostics.record(
+                "clipped_end_stall_recovered segment=$segmentIndex repeat=$repeatIndex " +
+                    "position=$positionMs windowEnd=$playbackWindowEndMs remaining=$remainingMs"
+            )
+            nearClippedEndPositionMs = -1L
+            nearClippedEndSegmentIndex = -1
+            nearClippedEndSinceElapsedMs = 0L
+            handlePlaybackWindowEnded()
+            return true
+        }
+        return false
     }
 
     private fun handleSleepTimer() {

@@ -6,6 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SegmentPlaybackPolicyTest {
+    @Test fun stalledClippedSegmentNearEndCanRecover() {
+        assertTrue(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(true, true, 52, 2_000))
+        assertFalse(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(true, true, 52, 1_999))
+        assertFalse(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(true, true, 151, 3_000))
+        assertFalse(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(false, true, 52, 3_000))
+        assertFalse(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(true, false, 52, 3_000))
+    }
+
     @Test fun previousRestartsCurrentAfterThreeSeconds() {
         assertEquals(4, SegmentPlaybackPolicy.previousTargetIndex(4, 3_001))
     }
