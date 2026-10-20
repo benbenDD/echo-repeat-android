@@ -9,7 +9,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.KeyEvent
 import androidx.core.net.toUri
+import androidx.core.content.IntentCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -278,6 +280,39 @@ class PlaybackService : MediaSessionService() {
         val sessionActivity = PendingIntent.getActivity(this, 1001, launchIntent, pendingIntentFlags)
         session = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(sessionActivity)
+            .setCallback(object : MediaSession.Callback {
+                override fun onMediaButtonEvent(
+                    session: MediaSession,
+                    controllerInfo: MediaSession.ControllerInfo,
+                    intent: Intent
+                ): Boolean {
+                    val event = IntentCompat.getParcelableExtra(
+                        intent, Intent.EXTRA_KEY_EVENT, KeyEvent::class.java
+                    ) ?: return false
+                    if (starts.isEmpty()) return false
+                    when (event.keyCode) {
+                        KeyEvent.KEYCODE_HEADSETHOOK,
+                        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                        KeyEvent.KEYCODE_MEDIA_PLAY,
+                        KeyEvent.KEYCODE_MEDIA_PAUSE,
+                        KeyEvent.KEYCODE_MEDIA_NEXT,
+                        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                                diagnostics.record("media_key code=${event.keyCode} phase=${phaseName()}")
+                                when (event.keyCode) {
+                                    KeyEvent.KEYCODE_MEDIA_PLAY -> handlePlayRequest()
+                                    KeyEvent.KEYCODE_MEDIA_PAUSE -> handlePauseRequest()
+                                    KeyEvent.KEYCODE_MEDIA_NEXT -> nextSegment()
+                                    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> previousSegment()
+                                    else -> togglePlayback()
+                                }
+                            }
+                            return true
+                        }
+                        else -> return false
+                    }
+                }
+            })
             .build()
         addSession(session)
         Log.i(TAG, "MediaSession registered added=${isSessionAdded(session)}")
@@ -411,9 +446,11 @@ class PlaybackService : MediaSessionService() {
 
         override fun play() = handlePlayRequest()
         override fun pause() = handlePauseRequest()
+        override fun setPlayWhenReady(playWhenReady: Boolean) {
+            if (playWhenReady) handlePlayRequest() else handlePauseRequest()
+        }
         override fun isPlaying(): Boolean = effectiveIsPlaying()
-        override fun getPlayWhenReady(): Boolean =
-            if (isInSegmentGap) !isSegmentGapPaused else player.playWhenReady
+        override fun getPlayWhenReady(): Boolean = playbackRequested()
         override fun getCurrentPosition(): Long = absolutePositionMs()
         override fun getContentPosition(): Long = absolutePositionMs()
         override fun getDuration(): Long = durationMs()
@@ -517,10 +554,9 @@ class PlaybackService : MediaSessionService() {
             )
         )
         player.setPlaybackSpeed(intent.getFloatExtra(PlaybackContract.EXTRA_SPEED, 1f))
-        startPlaybackAt(
-            startPosition,
-            shouldPlay = intent.getBooleanExtra(PlaybackContract.EXTRA_AUTO_PLAY, true)
-        )
+        val autoPlay = intent.getBooleanExtra(PlaybackContract.EXTRA_AUTO_PLAY, true)
+        if (autoPlay) prepareManualPlayback()
+        startPlaybackAt(startPosition, shouldPlay = autoPlay)
         if (activeInstance === this) activeSourceMediaId = sourceMediaId
         publish()
     }
@@ -911,7 +947,9 @@ class PlaybackService : MediaSessionService() {
             return false
         }
         val now = SystemClock.elapsedRealtime()
-        if (nearClippedEndPositionMs != positionMs || nearClippedEndSegmentIndex != segmentIndex) {
+        if (nearClippedEndSinceElapsedMs == 0L || nearClippedEndPositionMs != positionMs ||
+            nearClippedEndSegmentIndex != segmentIndex
+        ) {
             nearClippedEndPositionMs = positionMs
             nearClippedEndSegmentIndex = segmentIndex
             nearClippedEndSinceElapsedMs = now
@@ -939,7 +977,12 @@ class PlaybackService : MediaSessionService() {
 
     private fun handleSleepTimer() {
         if (sleepDeadline <= 0 || System.currentTimeMillis() < sleepDeadline) return
-        if (SleepTimerExpiryPolicy.action(stopAtSegmentEnd, isInSegmentGap) == SleepTimerExpiryAction.STOP_NOW) {
+        if (SleepTimerExpiryPolicy.action(
+                stopAtSegmentEnd,
+                isInSegmentGap,
+                player.playWhenReady || (isInSegmentGap && !isSegmentGapPaused)
+            ) == SleepTimerExpiryAction.STOP_NOW
+        ) {
             stopForSleepTimer()
             return
         }
@@ -1275,12 +1318,7 @@ class PlaybackService : MediaSessionService() {
     }
     private fun previousSegment() {
         if (starts.isEmpty()) return
-        val positionInSegment = if (isInSegmentGap) {
-            (ends[segmentIndex] - starts[segmentIndex]).coerceAtLeast(0)
-        } else {
-            (absolutePositionMs() - starts[segmentIndex]).coerceAtLeast(0)
-        }
-        val target = SegmentPlaybackPolicy.previousTargetIndex(segmentIndex, positionInSegment)
+        val target = SegmentPlaybackPolicy.previousTargetIndex(segmentIndex)
         moveTo(target)
     }
 
@@ -1291,7 +1329,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun moveTo(index: Int) {
         if (starts.isEmpty()) return
-        val continuePlaying = effectiveIsPlaying()
+        val continuePlaying = playbackRequested()
         cancelAutomatedWork(clearGap = true)
         segmentIndex = index.coerceIn(0, starts.lastIndex)
         repeatIndex = 1
@@ -1302,7 +1340,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun seekWithin(relativeMs: Long) {
         if (starts.isEmpty()) return
-        val continuePlaying = effectiveIsPlaying()
+        val continuePlaying = playbackRequested()
         cancelAutomatedWork(clearGap = true)
         repeatIndex = 1
         completed = false
@@ -1314,7 +1352,8 @@ class PlaybackService : MediaSessionService() {
 
     private fun seekAbsolute(positionMs: Long, forcePlay: Boolean = false) {
         if (starts.isEmpty()) return
-        val continuePlaying = forcePlay || effectiveIsPlaying()
+        val continuePlaying = forcePlay || playbackRequested()
+        if (forcePlay) prepareManualPlayback()
         cancelAutomatedWork(clearGap = true)
         val target = PlaybackMath.snapToPlayablePosition(
             starts,
@@ -1331,25 +1370,17 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun togglePlayback() {
-        if (isInSegmentGap) {
-            if (isSegmentGapPaused) resumeGap() else pauseGap()
-        } else if (player.isPlaying) {
-            playbackTaskActive = false
-            player.pause()
-        } else if (completed || player.playbackState == Player.STATE_ENDED) {
-            cancelPlaylistHandoff()
-            repeatIndex = 1
-            completed = false
-            stopReason = PlaybackStopReason.NONE
-            startPlaybackAt(starts.getOrElse(segmentIndex) { 0L }, shouldPlay = true)
-        } else {
-            playbackTaskActive = true
-            stopReason = PlaybackStopReason.NONE
-            player.play()
-            armBoundary()
+        if (playbackRequested()) handlePauseRequest() else handlePlayRequest()
+    }
+
+    private fun prepareManualPlayback() {
+        if (SleepTimerExpiryPolicy.shouldClearOnManualPlay(
+                sleepDeadline, System.currentTimeMillis(), pendingSleepStop
+            )
+        ) {
+            clearTimer()
         }
-        publish()
-        if (!effectiveIsPlaying()) persistPlaybackSession(force = true)
+        stopReason = PlaybackStopReason.NONE
     }
 
     private fun handlePlayRequest() {
@@ -1358,8 +1389,8 @@ class PlaybackService : MediaSessionService() {
                 "playWhenReady=${player.playWhenReady} volume=${player.volume}"
         )
         cancelPlaylistHandoff()
+        prepareManualPlayback()
         playbackTaskActive = true
-        stopReason = PlaybackStopReason.NONE
         if (isInSegmentGap) {
             if (isSegmentGapPaused) resumeGap()
         } else if (completed || player.playbackState == Player.STATE_ENDED) {
@@ -1421,6 +1452,9 @@ class PlaybackService : MediaSessionService() {
             "gap resumed generation=$token remaining=$segmentGapRemainingMs wake=${gapWakeLock.isHeld}"
         )
     }
+
+    private fun playbackRequested(): Boolean =
+        if (isInSegmentGap) !isSegmentGapPaused else player.playWhenReady
 
     private fun effectiveIsPlaying(): Boolean =
         player.isPlaying || (isInSegmentGap && !isSegmentGapPaused)
@@ -1531,8 +1565,13 @@ class PlaybackService : MediaSessionService() {
 
     private fun clearTimer(preserveStopReason: Boolean = false) {
         sleepDeadline = 0
+        pendingSleepStop = false
         if (!preserveStopReason) stopReason = PlaybackStopReason.NONE
         getSharedPreferences("sleep_timer", MODE_PRIVATE).edit().clear().apply()
+        if (!isInSegmentGap) {
+            cancelBoundary()
+            armBoundary()
+        }
         publish()
     }
 

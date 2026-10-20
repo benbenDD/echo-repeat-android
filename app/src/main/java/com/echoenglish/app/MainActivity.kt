@@ -2,6 +2,7 @@ package com.echoenglish.app
 
 import android.Manifest
 import android.content.Intent
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -21,6 +22,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -65,6 +68,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echoenglish.app.data.TrackEntity
@@ -471,119 +475,127 @@ private fun LibraryScreen(
     var showCreateFolder by remember { mutableStateOf(false) }
     val selectedFolder = folders.firstOrNull { it.id == selectedFolderId }
     val visibleTracks = tracks.filter { it.folderId == selectedFolderId }
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Spacer(Modifier.height(18.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("回声复读", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
-                Text("把长音频变成容易掌握的小段落", color = MutedInk, fontSize = 14.sp)
-            }
-            Surface(shape = CircleShape, color = YellowLight, modifier = Modifier.size(52.dp)) {
-                Box(contentAlignment = Alignment.Center) { HeadphonesSymbol(28.dp, Coral) }
-            }
-        }
-        Spacer(Modifier.height(18.dp))
-        OutlinedButton(
-            onClick = onSearch,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = ControlShape,
-            border = androidx.compose.foundation.BorderStroke(1.dp, Purple),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Purple)
-        ) {
-            Icon(Icons.Rounded.Search, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("搜索所有音频中的字幕", fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = onFiles,
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = ControlShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Purple)
-            ) {
-                UploadSymbol(20.dp, Color.White)
-                Spacer(Modifier.width(7.dp))
-                Text("批量导入文件", fontWeight = FontWeight.Bold)
-            }
-            OutlinedButton(
-                onClick = onFolder,
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = ControlShape,
-                border = androidx.compose.foundation.BorderStroke(1.3.dp, Coral),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Coral)
-            ) {
-                FolderSymbol(20.dp, Coral)
-                Spacer(Modifier.width(7.dp))
-                Text("导入文件夹", fontWeight = FontWeight.Bold)
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (selectedFolder != null) {
-                IconButton(onClick = { onSelectFolder(null) }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回全部文件夹", tint = Ink)
-                }
-                Spacer(Modifier.width(4.dp))
-            }
-            Text(selectedFolder?.name ?: "播放列表整理", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.width(8.dp))
-            Surface(shape = CircleShape, color = MintLight) {
-                Text("${visibleTracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
-            }
-            if (selectedFolder == null) {
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { showCreateFolder = true }) {
-                    FolderSymbol(18.dp, Purple)
-                    Spacer(Modifier.width(5.dp))
-                    Text("新建文件夹", color = Purple, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        if (selectedFolder == null && folders.isEmpty() && visibleTracks.isEmpty() || selectedFolder != null && visibleTracks.isEmpty()) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
-                shape = CardShape,
-                color = Color.White,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)
-            ) {
-                Column(Modifier.padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Surface(shape = CircleShape, color = SkyLight, modifier = Modifier.size(76.dp)) {
-                        Box(contentAlignment = Alignment.Center) { MusicSymbol(38.dp, Sky) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(bottom = 18.dp)
+    ) {
+        item {
+            Column {
+                Spacer(Modifier.height(18.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("回声复读", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
+                        Text("把长音频变成容易掌握的小段落", color = MutedInk, fontSize = 14.sp)
                     }
-                    Spacer(Modifier.height(16.dp))
-                    Text(if (selectedFolder == null) "还没有音频" else "这个文件夹还是空的", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
-                    Spacer(Modifier.height(6.dp))
-                    Text(if (selectedFolder == null) "新建文件夹整理电影、剧集，或直接导入 MP3 和 SRT" else "上方导入的音频和字幕会直接放入“${selectedFolder.name}”", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
+                    Surface(shape = CircleShape, color = YellowLight, modifier = Modifier.size(52.dp)) {
+                        Box(contentAlignment = Alignment.Center) { HeadphonesSymbol(28.dp, Coral) }
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                OutlinedButton(
+                    onClick = onSearch,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = ControlShape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Purple),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Purple)
+                ) {
+                    Icon(Icons.Rounded.Search, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("搜索所有音频中的字幕", fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = onFiles,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = ControlShape,
+                        colors = ButtonDefaults.buttonColors(containerColor = Purple)
+                    ) {
+                        UploadSymbol(20.dp, Color.White)
+                        Spacer(Modifier.width(7.dp))
+                        Text("批量导入文件", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = onFolder,
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = ControlShape,
+                        border = androidx.compose.foundation.BorderStroke(1.3.dp, Coral),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Coral)
+                    ) {
+                        FolderSymbol(20.dp, Coral)
+                        Spacer(Modifier.width(7.dp))
+                        Text("导入文件夹", fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (selectedFolder != null) {
+                        IconButton(onClick = { onSelectFolder(null) }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回全部文件夹", tint = Ink)
+                        }
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(selectedFolder?.name ?: "播放列表整理", modifier = Modifier.weight(1f), fontWeight = FontWeight.Black, color = Ink, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(8.dp))
+                    Surface(shape = CircleShape, color = MintLight) {
+                        Text("${visibleTracks.size}", Modifier.padding(horizontal = 9.dp, vertical = 3.dp), color = Mint, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                    }
+                    if (selectedFolder == null) {
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = { showCreateFolder = true }) {
+                            FolderSymbol(18.dp, Purple)
+                            Spacer(Modifier.width(5.dp))
+                            Text("新建文件夹", color = Purple, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+        if (selectedFolder == null && folders.isEmpty() && visibleTracks.isEmpty() || selectedFolder != null && visibleTracks.isEmpty()) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(top = 36.dp),
+                    shape = CardShape,
+                    color = Color.White,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SoftBorder)
+                ) {
+                    Column(Modifier.padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(shape = CircleShape, color = SkyLight, modifier = Modifier.size(76.dp)) {
+                            Box(contentAlignment = Alignment.Center) { MusicSymbol(38.dp, Sky) }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Text(if (selectedFolder == null) "还没有音频" else "这个文件夹还是空的", fontWeight = FontWeight.Black, fontSize = 19.sp, color = Ink)
+                        Spacer(Modifier.height(6.dp))
+                        Text(if (selectedFolder == null) "新建文件夹整理电影、剧集，或直接导入 MP3 和 SRT" else "上方导入的音频和字幕会直接放入“${selectedFolder.name}”", color = MutedInk, textAlign = TextAlign.Center, lineHeight = 20.sp, fontSize = 14.sp)
+                    }
                 }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
-                if (selectedFolder == null && folders.isNotEmpty()) {
-                    item { Text("文件夹", color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-                    items(folders, key = { "folder-${it.id}" }) { folder ->
-                        FolderCard(
-                            folder = folder,
-                            trackCount = tracks.count { it.folderId == folder.id },
-                            onOpen = { onSelectFolder(folder.id) },
-                            onRename = { onRenameFolder(folder, it) },
-                            onDelete = { onDeleteFolder(folder) }
-                        )
-                    }
-                    item {
-                        Text("未分类", modifier = Modifier.padding(top = 7.dp), color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                items(visibleTracks, key = { it.id }) { track ->
-                    TrackCard(
-                        track = track,
-                        folders = folders,
-                        onOpen = { onOpen(track) },
-                        onDelete = { onDelete(track) },
-                        onMove = { onMoveTrack(track, it) }
+            if (selectedFolder == null && folders.isNotEmpty()) {
+                item { Text("文件夹", color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                items(folders, key = { "folder-${it.id}" }) { folder ->
+                    FolderCard(
+                        folder = folder,
+                        trackCount = tracks.count { it.folderId == folder.id },
+                        onOpen = { onSelectFolder(folder.id) },
+                        onRename = { onRenameFolder(folder, it) },
+                        onDelete = { onDeleteFolder(folder) }
                     )
                 }
+                item {
+                    Text("未分类", modifier = Modifier.padding(top = 7.dp), color = MutedInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            items(visibleTracks, key = { it.id }) { track ->
+                TrackCard(
+                    track = track,
+                    folders = folders,
+                    onOpen = { onOpen(track) },
+                    onDelete = { onDelete(track) },
+                    onMove = { onMoveTrack(track, it) }
+                )
             }
         }
     }
@@ -785,8 +797,15 @@ private fun PlayerScreen(
     val segmentDuration = state.segmentDurationMs.coerceAtLeast(1)
     val relative = state.segmentPositionMs.coerceIn(0, segmentDuration)
     val totalDuration = state.durationMs.coerceAtLeast(1)
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val pageScroll = rememberScrollState()
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        Modifier.fillMaxSize()
+            .then(if (isLandscape) Modifier.verticalScroll(pageScroll) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onLibrary) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回播放列表", tint = Ink) }
             Text(title.ifBlank { "请选择音频" }, Modifier.weight(1f), color = Ink, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
@@ -799,7 +818,11 @@ private fun PlayerScreen(
                 )
             }
         }
-        val subtitleModifier = if (subtitlesExpanded) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 180.dp)
+        val subtitleModifier = when {
+            subtitlesExpanded && isLandscape -> Modifier.fillMaxWidth().height(160.dp)
+            subtitlesExpanded -> Modifier.fillMaxWidth().weight(1f)
+            else -> Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 180.dp)
+        }
         SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute, onToggleBookmark)
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

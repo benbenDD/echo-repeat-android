@@ -3,17 +3,11 @@ package com.echoenglish.app.playback
 enum class SegmentBoundaryAction { REPEAT_CURRENT, NEXT_SEGMENT, COMPLETE }
 
 object SegmentPlaybackPolicy {
-    const val PREVIOUS_RESTART_THRESHOLD_MS = 3_000L
     const val CLIPPED_END_STALL_MARGIN_MS = 150L
     const val CLIPPED_END_STALL_TIMEOUT_MS = 2_000L
     private const val GAP_WAKE_LOCK_FINISH_MARGIN_MS = 30_000L
 
-    fun previousTargetIndex(currentIndex: Int, positionInSegmentMs: Long): Int =
-        if (positionInSegmentMs > PREVIOUS_RESTART_THRESHOLD_MS) {
-            currentIndex
-        } else {
-            (currentIndex - 1).coerceAtLeast(0)
-        }
+    fun previousTargetIndex(currentIndex: Int): Int = (currentIndex - 1).coerceAtLeast(0)
 
     fun boundaryAction(
         repeatCount: Int,

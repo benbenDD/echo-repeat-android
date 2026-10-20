@@ -14,17 +14,12 @@ class SegmentPlaybackPolicyTest {
         assertFalse(SegmentPlaybackPolicy.shouldRecoverClippedEndStall(true, false, 52, 3_000))
     }
 
-    @Test fun previousRestartsCurrentAfterThreeSeconds() {
-        assertEquals(4, SegmentPlaybackPolicy.previousTargetIndex(4, 3_001))
-    }
-
-    @Test fun previousMovesBackAtOrBeforeThreeSeconds() {
-        assertEquals(3, SegmentPlaybackPolicy.previousTargetIndex(4, 3_000))
-        assertEquals(3, SegmentPlaybackPolicy.previousTargetIndex(4, 0))
+    @Test fun previousAlwaysMovesToPreviousSegment() {
+        assertEquals(3, SegmentPlaybackPolicy.previousTargetIndex(4))
     }
 
     @Test fun previousOnFirstSegmentStaysOnFirstSegment() {
-        assertEquals(0, SegmentPlaybackPolicy.previousTargetIndex(0, 0))
+        assertEquals(0, SegmentPlaybackPolicy.previousTargetIndex(0))
     }
 
     @Test fun finiteRepeatsUseTheSameSegmentUntilCountIsReached() {

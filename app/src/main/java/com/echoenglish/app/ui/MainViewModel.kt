@@ -120,7 +120,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         sleepTimerStopHandled = true
                         completionHandled = false
                         persistProgress(false)
-                        mutableMessage.value = "\u5b9a\u65f6\u7ed3\u675f\uff0c\u5df2\u5728\u5f53\u524d\u6bb5\u7ed3\u675f\u540e\u505c\u6b62"
+                        mutableMessage.value = "定时结束，已停止播放"
                     }
                 } else if (
                     PlaybackServicePolicy.shouldAdvancePlaylist(state.completed, state.stopReason) &&
@@ -601,12 +601,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             PlaybackContract.ACTION_PREVIOUS -> {
-                val positionInSegment = (safePosition - currentSegments[safeIndex].startMs)
-                    .coerceAtLeast(0L)
-                val targetIndex = SegmentPlaybackPolicy.previousTargetIndex(
-                    safeIndex,
-                    positionInSegment
-                )
+                val targetIndex = SegmentPlaybackPolicy.previousTargetIndex(safeIndex)
                 savedState.copy(
                     positionMs = currentSegments[targetIndex].startMs,
                     segmentIndex = targetIndex,
