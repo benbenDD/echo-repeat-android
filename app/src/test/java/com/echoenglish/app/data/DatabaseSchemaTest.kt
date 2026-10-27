@@ -7,7 +7,7 @@ import org.junit.Test
 
 class DatabaseSchemaTest {
     @Test fun databaseVersionIncludesPlaylistFolderMigration() {
-        assertEquals(5, DatabaseSchema.VERSION)
+        assertEquals(6, DatabaseSchema.VERSION)
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("ADD COLUMN subtitleOffsetMs"))
         assertTrue(DatabaseSchema.MIGRATION_1_TO_2.contains("DEFAULT 0"))
         assertTrue(DatabaseSchema.MIGRATION_2_TO_3.contains("CREATE TABLE subtitle_bookmarks"))

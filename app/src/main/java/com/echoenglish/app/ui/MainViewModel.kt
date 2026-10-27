@@ -23,6 +23,9 @@ import com.echoenglish.app.model.Segment
 import com.echoenglish.app.model.SegmentMode
 import com.echoenglish.app.model.SrtCue
 import com.echoenglish.app.model.SubtitlePlaybackScope
+import com.echoenglish.app.model.SubtitleCalibration
+import com.echoenglish.app.model.SubtitleCalibrationMode
+import com.echoenglish.app.model.SubtitleCalibrationPoint
 import com.echoenglish.app.playback.PlaybackBus
 import com.echoenglish.app.playback.PlaybackCommandRecoveryDecision
 import com.echoenglish.app.playback.PlaybackCommandRecoveryPolicy
@@ -58,6 +61,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val library = LibraryRepository(app, dao)
     private val subtitleSearchDao = app.database.subtitleSearchDao
     private val subtitleSearchIndexer = SubtitleSearchIndexer(app, subtitleSearchDao)
+    private val calibrationDao = app.database.subtitleCalibrationDao
+    private val mutableCalibration = MutableStateFlow(SubtitleCalibration())
+    val subtitleCalibration = mutableCalibration.asStateFlow()
+    private val mutableCalibrationCues = MutableStateFlow<List<SrtCue>>(emptyList())
+    val calibrationCues = mutableCalibrationCues.asStateFlow()
+    private val mutableCalibrationError = MutableStateFlow<String?>(null)
+    val calibrationError = mutableCalibrationError.asStateFlow()
+    private var calibrationTrackId = 0L
     private val mutableSearchResults = MutableStateFlow<List<SubtitleSearchResult>>(emptyList())
     val searchResults = mutableSearchResults.asStateFlow()
     private val mutableSearchIndexing = MutableStateFlow(false)
@@ -152,7 +163,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             delay(180)
-            mutableSearchResults.value = subtitleSearchDao.search(query, folderId, trackId)
+            val results = subtitleSearchDao.search(query, folderId, trackId)
+            val tracksById = if (results.isEmpty()) emptyMap() else dao.getAll().associateBy { it.id }
+            val calibrationByTrack = mutableMapOf<Long, SubtitleCalibration>()
+            mutableSearchResults.value = results.mapNotNull { result ->
+                val track = tracksById[result.trackId] ?: return@mapNotNull null
+                val calibration = calibrationByTrack[track.id] ?: calibrationDao.get(track.id).also {
+                    calibrationByTrack[track.id] = it
+                }
+                val adjusted = SubtitleTiming.adjustCues(
+                    listOf(SrtCue(result.cueId, result.sourceStartMs, result.endMs, result.text)),
+                    track.subtitleOffsetMs, track.durationMs, calibration
+                ).firstOrNull() ?: return@mapNotNull null
+                result.copy(startMs = adjusted.startMs, endMs = adjusted.endMs)
+            }
         }
     }
 
@@ -173,7 +197,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!PlaybackConfigurationPolicy.isCurrent(generation, playbackConfigurationGeneration)) return@launch
             mutableCurrent.value = track
             app.settingsRepository.saveLastTrack(track.id)
-            val target = (result.startMs + track.subtitleOffsetMs).coerceIn(0L, track.durationMs)
+            val target = (mutableCalibration.value.mapTime(result.sourceStartMs) +
+                SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)).coerceIn(0L, track.durationMs)
             sendTrackLoad(
                 track,
                 activeSettings,
@@ -317,12 +342,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun prepareTrack(track: TrackEntity, activeSettings: PlaybackSettings): Boolean =
         trackStateMutex.withLock {
         originalCues = readCues(track)
+        val calibration = calibrationDao.get(track.id)
+        calibrationTrackId = track.id
+        mutableCalibration.value = calibration
+        mutableCalibrationCues.value = originalCues
+        mutableCalibrationError.value = null
         bookmarkedCueIds = dao.getBookmarkedCueIds(track.id)
         currentSubtitleOffsetMs = SubtitleTiming.normalizedOffsetMs(track.subtitleOffsetMs)
         currentCues = SubtitleTiming.adjustCues(
             originalCues,
             currentSubtitleOffsetMs,
-            track.durationMs
+            track.durationMs,
+            calibration
         )
         publishLocatorSubtitles()
         if (activeSettings.segmentMode == SegmentMode.SUBTITLE &&
@@ -889,7 +920,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentCues = SubtitleTiming.adjustCues(
             originalCues,
             currentSubtitleOffsetMs,
-            track.durationMs
+            track.durationMs,
+            mutableCalibration.value
         )
         publishLocatorSubtitles()
         val updatedTrack = track.copy(subtitleOffsetMs = currentSubtitleOffsetMs)
@@ -962,6 +994,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> "字幕时间已恢复为不调整"
         }
         }
+        }
+    }
+
+    fun saveCalibrationPoint(cueId: Int, audioTimeMs: Long) = editCalibration { value ->
+        val cue = originalCues.firstOrNull { it.index == cueId } ?: return@editCalibration null
+        val point = SubtitleCalibrationPoint(cueId, cue.startMs, audioTimeMs - currentSubtitleOffsetMs)
+        value.copy(points = (value.points.filterNot { it.cueId == cueId } + point).sortedBy { it.subtitleTimeMs })
+    }
+
+    fun deleteCalibrationPoint(cueId: Int) = editCalibration { value ->
+        value.copy(points = value.points.filterNot { it.cueId == cueId })
+    }
+
+    fun setCalibrationMode(mode: SubtitleCalibrationMode) = editCalibration { it.copy(mode = mode) }
+    fun clearCalibration() = editCalibration { SubtitleCalibration() }
+
+    private fun editCalibration(change: (SubtitleCalibration) -> SubtitleCalibration?) {
+        val track = mutableCurrent.value ?: return
+        viewModelScope.launch {
+            trackStateMutex.withLock {
+                if (mutableCurrent.value?.id != track.id || calibrationTrackId != track.id) return@withLock
+                mutableCalibrationError.value = null
+                val next = change(mutableCalibration.value) ?: return@withLock
+                val error = next.validationError(track.durationMs, currentSubtitleOffsetMs)
+                if (error != null) {
+                    mutableCalibrationError.value = error
+                    return@withLock
+                }
+                if (next == mutableCalibration.value) return@withLock
+                calibrationDao.save(track.id, next)
+                if (mutableCurrent.value?.id != track.id) return@withLock
+                mutableCalibration.value = next
+                currentCues = SubtitleTiming.adjustCues(
+                    originalCues, currentSubtitleOffsetMs, track.durationMs, next
+                )
+                publishLocatorSubtitles()
+                rebuildActiveSegments(mutableSettings.value)
+            }
         }
     }
 

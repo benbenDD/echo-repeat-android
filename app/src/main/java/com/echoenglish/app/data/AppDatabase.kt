@@ -13,6 +13,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
     val trackDao: TrackDao by lazy { TrackDao(this) }
     val folderDao: FolderDao by lazy { FolderDao(this) }
     val subtitleSearchDao: SubtitleSearchDao by lazy { SubtitleSearchDao(this) }
+    val subtitleCalibrationDao: SubtitleCalibrationDao by lazy { SubtitleCalibrationDao(this) }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE tracks (
@@ -39,6 +40,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
         DatabaseSchema.MIGRATION_3_TO_4.take(1).forEach(db::execSQL)
         DatabaseSchema.MIGRATION_4_TO_5.forEach(db::execSQL)
+        DatabaseSchema.MIGRATION_5_TO_6.forEach(db::execSQL)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -46,5 +48,6 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 3) db.execSQL(DatabaseSchema.MIGRATION_2_TO_3)
         if (oldVersion < 4) DatabaseSchema.MIGRATION_3_TO_4.forEach(db::execSQL)
         if (oldVersion < 5) DatabaseSchema.MIGRATION_4_TO_5.forEach(db::execSQL)
+        if (oldVersion < 6) DatabaseSchema.MIGRATION_5_TO_6.forEach(db::execSQL)
     }
 }

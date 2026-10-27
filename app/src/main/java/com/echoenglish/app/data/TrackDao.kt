@@ -26,6 +26,10 @@ class TrackDao(private val db: AppDatabase) {
     }
 
     suspend fun attachSubtitle(id: Long, subtitleUri: String?) = withContext(Dispatchers.IO) {
+        if (query("id=?", arrayOf(id.toString())).firstOrNull()?.subtitleUri != subtitleUri) {
+            db.writableDatabase.delete("subtitle_calibration_points", "trackId=?", arrayOf(id.toString()))
+            db.writableDatabase.delete("subtitle_calibration_settings", "trackId=?", arrayOf(id.toString()))
+        }
         db.writableDatabase.update("tracks", ContentValues().apply { put("subtitleUri", subtitleUri) }, "id=?", arrayOf(id.toString())); refresh()
     }
 
@@ -98,6 +102,8 @@ class TrackDao(private val db: AppDatabase) {
         }
 
     suspend fun delete(track: TrackEntity) = withContext(Dispatchers.IO) {
+        db.writableDatabase.delete("subtitle_calibration_points", "trackId=?", arrayOf(track.id.toString()))
+        db.writableDatabase.delete("subtitle_calibration_settings", "trackId=?", arrayOf(track.id.toString()))
         db.writableDatabase.delete("subtitle_bookmarks", "trackId=?", arrayOf(track.id.toString()))
         db.writableDatabase.delete("subtitle_search", "trackId=?", arrayOf(track.id.toString()))
         db.writableDatabase.delete("subtitle_search_state", "trackId=?", arrayOf(track.id.toString()))

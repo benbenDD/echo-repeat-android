@@ -187,6 +187,11 @@ private fun EchoEnglishUi(
     val locatorSubtitles by vm.locatorSubtitles.collectAsState()
     val searchResults by vm.searchResults.collectAsState()
     val searchIndexing by vm.searchIndexing.collectAsState()
+    val calibration by vm.subtitleCalibration.collectAsState()
+    val calibrationCues by vm.calibrationCues.collectAsState()
+    val calibrationError by vm.calibrationError.collectAsState()
+    var showCalibration by remember(current?.id) { mutableStateOf(false) }
+    var calibrationCueId by remember(current?.id) { mutableStateOf<Int?>(null) }
     val openPlayerRequest by openPlayerRequests.collectAsState()
     val resumeRequest by resumeRequests.collectAsState()
     var screen by remember { mutableStateOf(Screen.LIBRARY) }
@@ -199,7 +204,7 @@ private fun EchoEnglishUi(
     var expandedSettingsSection by rememberSaveable { mutableStateOf<String?>(null) }
     val settingsListState = rememberLazyListState()
     val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(searchQuery, searchScope, searchFolderId, searchTrackId, searchIndexing) {
+    LaunchedEffect(searchQuery, searchScope, searchFolderId, searchTrackId, searchIndexing, calibration, current?.subtitleOffsetMs) {
         vm.searchSubtitles(
             searchQuery,
             if (searchScope == SearchScope.FOLDER) searchFolderId else null,
@@ -296,6 +301,7 @@ private fun EchoEnglishUi(
                     onLocateSubtitle = vm::locateSubtitle,
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
+                    onCalibrateSubtitle = { cueId -> calibrationCueId = cueId; showCalibration = true },
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = if (returnToSearch) Screen.SEARCH else Screen.LIBRARY }
                 )
@@ -313,10 +319,32 @@ private fun EchoEnglishUi(
                         }
                         vm.updateSettings(next)
                     },
-                    onSubtitleOffsetChange = vm::updateSubtitleOffset
+                    onSubtitleOffsetChange = vm::updateSubtitleOffset,
+                    calibrationPointCount = calibration.points.size,
+                    onOpenCalibration = {
+                        calibrationCueId = playback.subtitles.getOrNull(playback.subtitleIndex)?.cueId
+                        showCalibration = true
+                    }
                 )
             }
         }
+    }
+    if (showCalibration) {
+        SubtitleCalibrationDialog(
+            cues = calibrationCues,
+            calibration = calibration,
+            initialCueId = calibrationCueId,
+            offsetMs = current?.subtitleOffsetMs ?: 0L,
+            positionMs = playback.positionMs,
+            playbackRequested = playback.playbackRequested,
+            error = calibrationError,
+            onSave = vm::saveCalibrationPoint,
+            onDelete = vm::deleteCalibrationPoint,
+            onModeChange = vm::setCalibrationMode,
+            onClear = vm::clearCalibration,
+            onTogglePlayback = { vm.command(PlaybackContract.ACTION_TOGGLE) },
+            onDismiss = { showCalibration = false }
+        )
     }
 }
 
@@ -782,6 +810,7 @@ private fun PlayerScreen(
     onLocateSubtitle: (Long, Int?) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit,
+    onCalibrateSubtitle: (Int) -> Unit,
     onTimer: (Int) -> Unit,
     onLibrary: () -> Unit
 ) {
@@ -895,7 +924,8 @@ private fun PlayerScreen(
             locatorSubtitles,
             { showSegments = false },
             onLocateSubtitle,
-            onToggleBookmarks
+            onToggleBookmarks,
+            onCalibrateSubtitle
         )
     }
 }
@@ -994,7 +1024,8 @@ private fun SegmentPickerDialog(
     locatorSubtitles: List<SubtitleSnapshot>,
     onDismiss: () -> Unit,
     onSelect: (Long, Int?) -> Unit,
-    onToggleBookmarks: (List<Int>) -> Unit
+    onToggleBookmarks: (List<Int>) -> Unit,
+    onCalibrateSubtitle: (Int) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -1164,6 +1195,9 @@ private fun SegmentPickerDialog(
                             if (row.cueIds.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
                         }
                         if (row.cueIds.isNotEmpty()) {
+                            TextButton(onClick = { onCalibrateSubtitle(row.cueIds.first()) }) {
+                                Text("校准", fontSize = 12.sp)
+                            }
                             IconButton(onClick = { onToggleBookmarks(row.cueIds) }) {
                                 RoundedGlyph(
                                     RoundedGlyphKind.BOOKMARK,
@@ -1295,7 +1329,9 @@ private fun SettingsScreen(
     onExpandedSectionChange: (String?) -> Unit,
     listState: LazyListState,
     onChange: (PlaybackSettings) -> Unit,
-    onSubtitleOffsetChange: (Long) -> Unit
+    onSubtitleOffsetChange: (Long) -> Unit,
+    calibrationPointCount: Int,
+    onOpenCalibration: () -> Unit
 ) {
     val section = expandedSectionName?.let {
         runCatching { SettingsSection.valueOf(it) }.getOrNull()
@@ -1343,6 +1379,9 @@ private fun SettingsScreen(
                 val offsetMs = currentTrack?.subtitleOffsetMs ?: 0L
                 SettingCard("字幕同步校准", RoundedGlyphKind.SYNC, Color(0xFF287EBC), SkyLight, enabled, if (enabled) "字幕比声音早请选择延后，字幕比声音晚请选择提前" else "请先打开一个带字幕的音频") {
                     Text("当前：${formatSubtitleOffset(offsetMs)}", color = if (offsetMs == 0L) MutedInk else Purple, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                    TextButton(onClick = onOpenCalibration, enabled = enabled) {
+                        Text("多点字幕校准（${calibrationPointCount} 个点）")
+                    }
                     Spacer(Modifier.height(8.dp))
                     ChoiceGrid(listOf("提前2秒" to -2_000L, "提前1秒" to -1_000L, "提前0.5秒" to -500L, "不调整" to 0L, "延后0.5秒" to 500L, "延后1秒" to 1_000L, "延后2秒" to 2_000L), offsetMs, enabled) { onSubtitleOffsetChange(it) }
                     Spacer(Modifier.height(8.dp))

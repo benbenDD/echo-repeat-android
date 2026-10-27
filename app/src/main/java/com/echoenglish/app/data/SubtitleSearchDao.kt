@@ -14,7 +14,8 @@ data class SubtitleSearchResult(
     val cueId: Int,
     val startMs: Long,
     val endMs: Long,
-    val text: String
+    val text: String,
+    val sourceStartMs: Long = startMs
 )
 
 class SubtitleSearchDao(private val database: AppDatabase) {
