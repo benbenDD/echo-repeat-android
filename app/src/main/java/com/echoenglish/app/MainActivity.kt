@@ -301,7 +301,6 @@ private fun EchoEnglishUi(
                     onLocateSubtitle = vm::locateSubtitle,
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
-                    onCalibrateSubtitle = { cueId -> calibrationCueId = cueId; showCalibration = true },
                     onTimer = vm::setSleepTimer,
                     onLibrary = { screen = if (returnToSearch) Screen.SEARCH else Screen.LIBRARY }
                 )
@@ -810,7 +809,6 @@ private fun PlayerScreen(
     onLocateSubtitle: (Long, Int?) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit,
-    onCalibrateSubtitle: (Int) -> Unit,
     onTimer: (Int) -> Unit,
     onLibrary: () -> Unit
 ) {
@@ -924,8 +922,7 @@ private fun PlayerScreen(
             locatorSubtitles,
             { showSegments = false },
             onLocateSubtitle,
-            onToggleBookmarks,
-            onCalibrateSubtitle
+            onToggleBookmarks
         )
     }
 }
@@ -1024,8 +1021,7 @@ private fun SegmentPickerDialog(
     locatorSubtitles: List<SubtitleSnapshot>,
     onDismiss: () -> Unit,
     onSelect: (Long, Int?) -> Unit,
-    onToggleBookmarks: (List<Int>) -> Unit,
-    onCalibrateSubtitle: (Int) -> Unit
+    onToggleBookmarks: (List<Int>) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -1195,9 +1191,6 @@ private fun SegmentPickerDialog(
                             if (row.cueIds.isEmpty()) Text("这一段没有字幕，不能添加字幕书签", color = MutedInk, fontSize = 11.sp)
                         }
                         if (row.cueIds.isNotEmpty()) {
-                            TextButton(onClick = { onCalibrateSubtitle(row.cueIds.first()) }) {
-                                Text("校准", fontSize = 12.sp)
-                            }
                             IconButton(onClick = { onToggleBookmarks(row.cueIds) }) {
                                 RoundedGlyph(
                                     RoundedGlyphKind.BOOKMARK,
@@ -1376,12 +1369,18 @@ private fun SettingsScreen(
         if (section == SettingsSection.SEGMENTS) {
             item {
                 val enabled = currentTrack?.subtitleUri != null
+                SettingCard("多点字幕校准", RoundedGlyphKind.SYNC, Purple, PurpleLight, enabled,
+                    "用于中途错位或逐渐漂移，只需为少数关键台词设置校准点") {
+                    TextButton(onClick = onOpenCalibration, enabled = enabled) {
+                        Text("管理校准点（${calibrationPointCount} 个）")
+                    }
+                }
+            }
+            item {
+                val enabled = currentTrack?.subtitleUri != null
                 val offsetMs = currentTrack?.subtitleOffsetMs ?: 0L
                 SettingCard("字幕同步校准", RoundedGlyphKind.SYNC, Color(0xFF287EBC), SkyLight, enabled, if (enabled) "字幕比声音早请选择延后，字幕比声音晚请选择提前" else "请先打开一个带字幕的音频") {
                     Text("当前：${formatSubtitleOffset(offsetMs)}", color = if (offsetMs == 0L) MutedInk else Purple, fontSize = 13.sp, fontWeight = FontWeight.Black)
-                    TextButton(onClick = onOpenCalibration, enabled = enabled) {
-                        Text("多点字幕校准（${calibrationPointCount} 个点）")
-                    }
                     Spacer(Modifier.height(8.dp))
                     ChoiceGrid(listOf("提前2秒" to -2_000L, "提前1秒" to -1_000L, "提前0.5秒" to -500L, "不调整" to 0L, "延后0.5秒" to 500L, "延后1秒" to 1_000L, "延后2秒" to 2_000L), offsetMs, enabled) { onSubtitleOffsetChange(it) }
                     Spacer(Modifier.height(8.dp))

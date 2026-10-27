@@ -1,6 +1,8 @@
 package com.echoenglish.app
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -50,6 +52,8 @@ internal fun SubtitleCalibrationDialog(
     }
     var inputError by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
+    var selectingCue by remember { mutableStateOf(false) }
+    var cueQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -69,16 +73,20 @@ internal fun SubtitleCalibrationDialog(
                 }
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = calibration.mode == SubtitleCalibrationMode.GRADUAL,
-                            onClick = { onModeChange(SubtitleCalibrationMode.GRADUAL) },
-                            label = { Text("渐进校准") }, modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = calibration.mode == SubtitleCalibrationMode.SECTION,
-                            onClick = { onModeChange(SubtitleCalibrationMode.SECTION) },
-                            label = { Text("分区校准") }, modifier = Modifier.weight(1f)
-                        )
+                        listOf(SubtitleCalibrationMode.GRADUAL to "渐进校准",
+                            SubtitleCalibrationMode.SECTION to "分区校准").forEach { (mode, label) ->
+                            val selected = calibration.mode == mode
+                            Surface(
+                                onClick = { onModeChange(mode) }, modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+                            ) {
+                                Text(label, modifier = Modifier.padding(12.dp),
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        }
                     }
                     Text(
                         if (calibration.mode == SubtitleCalibrationMode.GRADUAL)
@@ -88,6 +96,9 @@ internal fun SubtitleCalibrationDialog(
                     )
                 }
                 item {
+                    TextButton(onClick = { cueQuery = ""; selectingCue = true }) {
+                        Text("添加校准点 · 选择字幕")
+                    }
                     OutlinedTextField(
                         value = numberInput,
                         onValueChange = { numberInput = it; inputError = null },
@@ -167,6 +178,33 @@ internal fun SubtitleCalibrationDialog(
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
+    if (selectingCue) AlertDialog(
+        onDismissRequest = { selectingCue = false },
+        title = { Text("选择要校准的字幕") },
+        text = {
+            Column {
+                OutlinedTextField(value = cueQuery, onValueChange = { cueQuery = it },
+                    label = { Text("搜索台词或字幕序号") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                    items(cues.withIndex().filter { (index, cue) ->
+                        cueQuery.isBlank() || cue.text.contains(cueQuery, ignoreCase = true) ||
+                            (index + 1).toString() == cueQuery.trim()
+                    }, key = { it.value.index }) { (index, cue) ->
+                        Column(Modifier.fillMaxWidth().clickable {
+                            numberInput = (index + 1).toString()
+                            inputError = null
+                            selectingCue = false
+                        }.padding(vertical = 10.dp)) {
+                            Text("第 ${index + 1} 条 · ${formatSubtitleTime(cue.startMs)}", fontWeight = FontWeight.Bold)
+                            Text(cue.text, fontSize = 13.sp, maxLines = 3)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { selectingCue = false }) { Text("取消") } }
     )
     if (confirmReset) AlertDialog(
         onDismissRequest = { confirmReset = false },
