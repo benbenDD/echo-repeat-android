@@ -21,4 +21,16 @@ class BookmarkSelectionTest {
     @Test fun emptyBookmarksProduceNoPlayableCues() {
         assertEquals(emptyList<SrtCue>(), BookmarkSelection.filter(cues, emptySet()))
     }
+
+    @Test fun temporaryLocationAddsOnlyTheSelectedCueWithoutChangingBookmarks() {
+        val bookmarks = setOf(10)
+        assertEquals(listOf(10, 20), BookmarkSelection.filter(cues, bookmarks, 20).map { it.index })
+        assertEquals(setOf(10), bookmarks)
+        assertEquals(listOf(10), BookmarkSelection.filter(cues, bookmarks).map { it.index })
+    }
+
+    @Test fun replacingTemporaryLocationDoesNotKeepOldTemporaryCues() {
+        assertEquals(listOf(10, 30), BookmarkSelection.filter(cues, setOf(10), 30).map { it.index })
+        assertEquals(listOf(10), BookmarkSelection.filter(cues, setOf(10), 10).map { it.index })
+    }
 }

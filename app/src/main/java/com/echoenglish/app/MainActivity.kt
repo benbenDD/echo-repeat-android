@@ -293,7 +293,10 @@ private fun EchoEnglishUi(
                     locatorSubtitles = locatorSubtitles,
                     onCommand = vm::command,
                     onSeekAbsolute = vm::seekAbsolute,
-                    onSeekAbsoluteAndPlay = vm::seekAbsoluteAndPlay,
+                    onLocateSubtitle = vm::locateSubtitle,
+                    bookmarksOnlyPlayback = settings.segmentMode == SegmentMode.SUBTITLE &&
+                        settings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES,
+                    onRestoreBookmarkedPlayback = vm::restoreBookmarkedPlayback,
                     onToggleBookmark = vm::toggleBookmark,
                     onToggleBookmarks = vm::toggleBookmarks,
                     onTimer = vm::setSleepTimer,
@@ -779,7 +782,9 @@ private fun PlayerScreen(
     locatorSubtitles: List<SubtitleSnapshot>,
     onCommand: (String, Long?) -> Unit,
     onSeekAbsolute: (Long) -> Unit,
-    onSeekAbsoluteAndPlay: (Long) -> Unit,
+    onLocateSubtitle: (Long, Int?, Boolean) -> Unit,
+    bookmarksOnlyPlayback: Boolean,
+    onRestoreBookmarkedPlayback: () -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit,
     onTimer: (Int) -> Unit,
@@ -787,6 +792,14 @@ private fun PlayerScreen(
 ) {
     var showTimer by remember { mutableStateOf(false) }
     var showSegments by remember { mutableStateOf(false) }
+    var pendingUnbookmarkedCue by remember(state.mediaId) { mutableStateOf<Pair<Long, Int>?>(null) }
+    fun locateSubtitle(positionMs: Long, cueId: Int?) {
+        val cue = locatorSubtitles.firstOrNull { it.cueId == cueId }
+        if (bookmarksOnlyPlayback && cue != null && !cue.bookmarked &&
+            state.temporarySubtitleCueId != cueId
+        ) pendingUnbookmarkedCue = positionMs to cue.cueId
+        else onLocateSubtitle(positionMs, cueId, false)
+    }
     var subtitlesExpanded by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var segmentDrag by remember { mutableStateOf<Float?>(null) }
@@ -823,7 +836,7 @@ private fun PlayerScreen(
             subtitlesExpanded -> Modifier.fillMaxWidth().weight(1f)
             else -> Modifier.fillMaxWidth().heightIn(min = 150.dp, max = 180.dp)
         }
-        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, onSeekAbsolute, onToggleBookmark)
+        SubtitlePanel(state, subtitleModifier, subtitlesExpanded, { subtitlesExpanded = it }, ::locateSubtitle, onToggleBookmark)
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             InfoPill("第 ${state.segmentIndex + 1}/${state.segmentCount.coerceAtLeast(1)} 段", PurpleLight, Purple)
@@ -887,6 +900,11 @@ private fun PlayerScreen(
                 AssistChip(onClick = { showTimer = true }, label = { Text("${formatTime(left)} 后停止") }, colors = AssistChipDefaults.assistChipColors(containerColor = YellowLight))
             }
         }
+        if (state.temporarySubtitleCueId != null) {
+            TextButton(onClick = onRestoreBookmarkedPlayback) {
+                Text("本轮含临时字幕 · 恢复仅书签", color = Purple)
+            }
+        }
     }
     if (showTimer) SleepTimerDialog({ showTimer = false }) { onTimer(it); showTimer = false }
     if (showSegments) {
@@ -894,17 +912,32 @@ private fun PlayerScreen(
             state,
             locatorSubtitles,
             { showSegments = false },
-            { positionMs ->
-                if (state.isPlaying) onSeekAbsoluteAndPlay(positionMs)
-                else onSeekAbsolute(positionMs)
-            },
+            ::locateSubtitle,
             onToggleBookmarks
+        )
+    }
+    pendingUnbookmarkedCue?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingUnbookmarkedCue = null },
+            title = { Text("这条字幕未加书签") },
+            text = {
+                Text("当前仅播放书签字幕。是否只把这一条临时加入本轮播放范围？不会添加书签；本轮结束或重新打开音频后恢复。播放中会继续播放，已暂停时保持暂停。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingUnbookmarkedCue = null
+                    onLocateSubtitle(target.first, target.second, true)
+                }) { Text("临时定位") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingUnbookmarkedCue = null }) { Text("取消") }
+            }
         )
     }
 }
 
 @Composable
-private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long) -> Unit, onToggleBookmark: (Int) -> Unit) {
+private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded: Boolean, onExpandedChange: (Boolean) -> Unit, onSubtitleClick: (Long, Int?) -> Unit, onToggleBookmark: (Int) -> Unit) {
     val listState = rememberLazyListState()
     var userBrowsing by remember { mutableStateOf(false) }
     var autoScrolling by remember { mutableStateOf(false) }
@@ -962,7 +995,7 @@ private fun SubtitlePanel(state: PlaybackSnapshot, modifier: Modifier, expanded:
                             Modifier.fillMaxWidth().padding(horizontal = 10.dp)
                                 .background(if (selected) PurpleLight else Color.Transparent, RoundedCornerShape(14.dp))
                                 .border(if (selected) 1.3.dp else 0.dp, if (selected) Purple else Color.Transparent, RoundedCornerShape(14.dp))
-                                .clickable { onSubtitleClick(cue.startMs) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                .clickable { onSubtitleClick(cue.startMs, cue.cueId) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
@@ -996,7 +1029,7 @@ private fun SegmentPickerDialog(
     state: PlaybackSnapshot,
     locatorSubtitles: List<SubtitleSnapshot>,
     onDismiss: () -> Unit,
-    onSelect: (Long) -> Unit,
+    onSelect: (Long, Int?) -> Unit,
     onToggleBookmarks: (List<Int>) -> Unit
 ) {
     var bookmarkedOnly by remember { mutableStateOf(false) }
@@ -1158,7 +1191,7 @@ private fun SegmentPickerDialog(
                     Row(
                         Modifier.fillMaxWidth().background(if (row.selected) PurpleLight else Color(0xFFF8F6F4), RoundedCornerShape(13.dp))
                             .border(if (row.selected) 1.3.dp else 0.dp, if (row.selected) Purple else Color.Transparent, RoundedCornerShape(13.dp))
-                            .clickable { onSelect(row.startMs) }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+                            .clickable { onSelect(row.startMs, row.cueIds.singleOrNull()) }.padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {

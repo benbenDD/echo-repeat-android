@@ -9,6 +9,10 @@ sealed interface PlaybackCommandRecoveryDecision {
 object PlaybackCommandRecoveryPolicy {
     const val ACTION_FOREGROUND_RESUME = "internal.FOREGROUND_RESUME"
 
+    fun subtitleSeekAction(playbackRequested: Boolean): String =
+        if (playbackRequested) PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY
+        else PlaybackContract.ACTION_SEEK_ABSOLUTE
+
     fun decide(
         action: String?,
         sourceReady: Boolean,

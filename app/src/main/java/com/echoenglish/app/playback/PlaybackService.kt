@@ -65,6 +65,7 @@ class PlaybackService : MediaSessionService() {
     private var cueTexts = emptyArray<String>()
     private var cueIds = intArrayOf()
     private var bookmarkedCueIds = emptySet<Int>()
+    private var temporarySubtitleCueId: Int? = null
     private var segmentCache = emptyList<SegmentSnapshot>()
     private var subtitleCache = emptyList<SubtitleSnapshot>()
     private var segmentIndex = 0
@@ -496,6 +497,8 @@ class PlaybackService : MediaSessionService() {
         cueEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_CUE_ENDS) ?: longArrayOf()
         cueTexts = intent.getStringArrayExtra(PlaybackContract.EXTRA_CUE_TEXTS) ?: emptyArray()
         cueIds = intent.getIntArrayExtra(PlaybackContract.EXTRA_CUE_IDS) ?: IntArray(cueStarts.size) { it }
+        temporarySubtitleCueId = intent.getIntExtra(PlaybackContract.EXTRA_TEMPORARY_CUE_ID, -1)
+            .takeIf { it >= 0 }
         bookmarkedCueIds = intent.getIntArrayExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS)
             ?.toSet()
             .orEmpty()
@@ -760,7 +763,9 @@ class PlaybackService : MediaSessionService() {
     private fun updateSegments(intent: Intent) {
         val rawStarts = intent.getLongArrayExtra(PlaybackContract.EXTRA_STARTS) ?: return
         val rawEnds = intent.getLongArrayExtra(PlaybackContract.EXTRA_ENDS) ?: return
-        val continuePlaying = effectiveIsPlaying()
+        val continuePlaying = playbackRequested()
+        temporarySubtitleCueId = intent.getIntExtra(PlaybackContract.EXTRA_TEMPORARY_CUE_ID, -1)
+            .takeIf { it >= 0 }
         val absolute = intent.getLongExtra(
             PlaybackContract.EXTRA_POSITION,
             absolutePositionMs()
@@ -1611,6 +1616,8 @@ class PlaybackService : MediaSessionService() {
                 mediaId = sourceMediaId,
                 title = currentTitle,
                 isPlaying = effectiveIsPlaying(),
+                playbackRequested = playbackRequested(),
+                temporarySubtitleCueId = temporarySubtitleCueId,
                 positionMs = position,
                 durationMs = durationMs(),
                 segmentIndex = segmentIndex,

@@ -4,6 +4,27 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PlaybackCommandRecoveryPolicyTest {
+    @Test fun locatorKeepsPlayIntentWhileBufferingEvenIfSourceNeedsRecovery() {
+        val buffering = PlaybackSnapshot(isPlaying = false, playbackRequested = true)
+        val action = PlaybackCommandRecoveryPolicy.subtitleSeekAction(buffering.playbackRequested)
+        assertEquals(PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY, action)
+        assertEquals(
+            PlaybackCommandRecoveryDecision.Recover(autoPlay = true),
+            PlaybackCommandRecoveryPolicy.decide(action, false, true)
+        )
+    }
+
+    @Test fun locatorKeepsUserPausedGapPausedDuringRecovery() {
+        val pausedGap = PlaybackSnapshot(
+            isInSegmentGap = true, isSegmentGapPaused = true, playbackRequested = false
+        )
+        val action = PlaybackCommandRecoveryPolicy.subtitleSeekAction(pausedGap.playbackRequested)
+        assertEquals(
+            PlaybackCommandRecoveryDecision.Recover(autoPlay = false),
+            PlaybackCommandRecoveryPolicy.decide(action, false, true)
+        )
+    }
+
     @Test fun locatorSeekRecoversMissingSourceAndStartsPlayback() {
         assertEquals(
             PlaybackCommandRecoveryDecision.Recover(autoPlay = true),

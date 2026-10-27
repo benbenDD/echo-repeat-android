@@ -22,6 +22,8 @@ data class PlaybackSnapshot(
     val mediaId: String = "",
     val title: String = "",
     val isPlaying: Boolean = false,
+    val playbackRequested: Boolean = false,
+    val temporarySubtitleCueId: Int? = null,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val segmentIndex: Int = 0,
