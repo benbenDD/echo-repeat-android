@@ -78,7 +78,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableLocatorSubtitles = MutableStateFlow<List<SubtitleSnapshot>>(emptyList())
     val locatorSubtitles = mutableLocatorSubtitles.asStateFlow()
     private var originalCues: List<SrtCue> = emptyList()
-    private var temporaryLocatorCueId: Int? = null
     private var currentCues: List<SrtCue> = emptyList()
     private var currentSubtitleOffsetMs = 0L
     private var currentSegments: List<Segment> = emptyList()
@@ -158,7 +157,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openSearchResult(result: SubtitleSearchResult) {
-        temporaryLocatorCueId = null
         val generation = ++playbackConfigurationGeneration
         viewModelScope.launch {
             val track = dao.getById(result.trackId) ?: return@launch
@@ -241,7 +239,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openTrack(track: TrackEntity) {
-        temporaryLocatorCueId = null
         val generation = ++playbackConfigurationGeneration
         viewModelScope.launch {
         val activeSettings = mutableSettings.value
@@ -286,7 +283,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         trackId: Long,
         activeSettings: PlaybackSettings
     ): Boolean {
-        temporaryLocatorCueId = playback.value.temporarySubtitleCueId
         val track = dao.getById(trackId)?.takeIf { it.available } ?: return false
         if (!prepareTrack(track, activeSettings)) return false
         mutableCurrent.value = track
@@ -370,7 +366,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             putExtra(PlaybackContract.EXTRA_CUE_IDS, currentCues.map { it.index }.toIntArray())
             putExtra(PlaybackContract.EXTRA_BOOKMARKED_CUE_IDS, bookmarkedCueIds.toIntArray())
             putExtra(PlaybackContract.EXTRA_REPEATS, activeSettings.repeatCount)
-            putExtra(PlaybackContract.EXTRA_TEMPORARY_CUE_ID, temporaryLocatorCueId ?: -1)
             putExtra(PlaybackContract.EXTRA_GAP_MS, activeSettings.segmentGapMs)
             putExtra(
                 PlaybackContract.EXTRA_FOLLOW_ALONG,
@@ -406,50 +401,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun seekAbsoluteAndPlay(positionMs: Long) =
         command(PlaybackContract.ACTION_SEEK_ABSOLUTE_AND_PLAY, positionMs)
 
-    fun locateSubtitle(positionMs: Long, cueId: Int?, allowTemporary: Boolean) {
+    fun locateSubtitle(positionMs: Long, cueId: Int?) {
         val requestedPlayback = playback.value.playbackRequested
         viewModelScope.launch {
             playbackCommandMutex.withLock {
-                val track = mutableCurrent.value ?: return@withLock
+                if (mutableCurrent.value == null) return@withLock
                 val value = mutableSettings.value
                 val cue = cueId?.let { id -> currentCues.firstOrNull { it.index == id } }
                 val target = cue?.startMs ?: positionMs
-                val outsideBookmarks = value.segmentMode == SegmentMode.SUBTITLE &&
-                    value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES &&
-                    cueId != null && cueId !in bookmarkedCueIds && cueId != temporaryLocatorCueId
-                if (outsideBookmarks) {
-                    if (!allowTemporary || cue == null) {
-                        mutableMessage.value = "这条字幕未加书签，请确认临时定位或先添加书签"
-                        return@withLock
-                    }
-                    playbackConfigurationGeneration++
-                    temporaryLocatorCueId = cueId
-                    currentSegments = buildSegments(value, track.durationMs)
-                    if (currentSegments.isEmpty()) return@withLock
-                    sendTrackLoad(
-                        track, value,
-                        PlaybackRestoreLoadState(
-                            positionMs = target,
-                            segmentIndex = 0,
-                            repeatIndex = 1,
-                            autoPlay = requestedPlayback,
-                            restoreExactPosition = true
-                        )
-                    )
-                } else {
-                    deliverPlaybackCommand(
-                        PlaybackCommandRecoveryPolicy.subtitleSeekAction(requestedPlayback),
-                        position = target
-                    )
-                }
+                val bookmarksOnly = value.segmentMode == SegmentMode.SUBTITLE &&
+                    value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES
+                if (!BookmarkSelection.canLocate(cue?.index, bookmarkedCueIds, bookmarksOnly)) return@withLock
+                deliverPlaybackCommand(
+                    PlaybackCommandRecoveryPolicy.subtitleSeekAction(requestedPlayback),
+                    position = target
+                )
             }
-        }
-    }
-
-    fun restoreBookmarkedPlayback() = viewModelScope.launch {
-        playbackCommandMutex.withLock {
-            temporaryLocatorCueId = null
-            rebuildActiveSegments(mutableSettings.value)
         }
     }
 
@@ -476,9 +443,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 bookmarkedCueIds + cueId
             } else {
                 bookmarkedCueIds - cueId
-            }
-            temporaryLocatorCueId = temporaryLocatorCueId?.takeUnless {
-                it in bookmarkedCueIds || bookmarkedCueIds.isEmpty()
             }
 
             val activeSettings = mutableSettings.value
@@ -519,9 +483,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val shouldBookmark = !validIds.all { it in bookmarkedCueIds }
             validIds.forEach { dao.setCueBookmarked(track.id, it, shouldBookmark) }
             bookmarkedCueIds = if (shouldBookmark) bookmarkedCueIds + validIds else bookmarkedCueIds - validIds
-            temporaryLocatorCueId = temporaryLocatorCueId?.takeUnless {
-                it in bookmarkedCueIds || bookmarkedCueIds.isEmpty()
-            }
             val activeSettings = mutableSettings.value
             if (activeSettings.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
                 if (bookmarkedCueIds.isEmpty()) {
@@ -736,9 +697,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun applySettings(value: PlaybackSettings, previous: PlaybackSettings) {
-        if (value.segmentMode != SegmentMode.SUBTITLE ||
-            value.subtitlePlaybackScope != SubtitlePlaybackScope.BOOKMARKED_CUES
-        ) temporaryLocatorCueId = null
         mutableSettings.value = value
         viewModelScope.launch {
             app.settingsRepository.save(value)
@@ -833,7 +791,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_UPDATE_SEGMENTS
-            putExtra(PlaybackContract.EXTRA_TEMPORARY_CUE_ID, temporaryLocatorCueId ?: -1)
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
@@ -854,7 +811,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (value.segmentMode == SegmentMode.SUBTITLE && currentCues.isNotEmpty()) {
             return if (value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE) {
                 val playableCues = if (value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
-                    BookmarkSelection.filter(currentCues, bookmarkedCueIds, temporaryLocatorCueId)
+                    BookmarkSelection.filter(currentCues, bookmarkedCueIds)
                 } else {
                     currentCues
                 }
@@ -893,7 +850,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             value.subtitlePlaybackScope != SubtitlePlaybackScope.FULL_TIMELINE &&
             Segmenter.cueOnly(
                 if (value.subtitlePlaybackScope == SubtitlePlaybackScope.BOOKMARKED_CUES) {
-                    BookmarkSelection.filter(currentCues, bookmarkedCueIds, temporaryLocatorCueId)
+                    BookmarkSelection.filter(currentCues, bookmarkedCueIds)
                 } else currentCues,
                 durationMs,
                 mergeOverlappingCues = !value.separateSubtitleCues
@@ -964,7 +921,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         sendService(Intent(app, PlaybackService::class.java).apply {
             action = PlaybackContract.ACTION_UPDATE_SEGMENTS
-            putExtra(PlaybackContract.EXTRA_TEMPORARY_CUE_ID, temporaryLocatorCueId ?: -1)
             putExtra(PlaybackContract.EXTRA_STARTS, currentSegments.map { it.startMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_ENDS, currentSegments.map { it.endMs }.toLongArray())
             putExtra(PlaybackContract.EXTRA_TEXTS, currentSegments.map { it.text }.toTypedArray())
@@ -1061,8 +1017,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun advancePlaylist(expectedGeneration: Long) {
         if (!PlaybackConfigurationPolicy.isCurrent(expectedGeneration, playbackConfigurationGeneration)) return
-        val hadTemporarySubtitle = temporaryLocatorCueId != null
-        temporaryLocatorCueId = null
         val list = tracks.value.filter { it.folderId == mutableCurrent.value?.folderId }
         val currentTrack = mutableCurrent.value ?: return
         val activeSettings = mutableSettings.value
@@ -1089,7 +1043,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val index = list.indexOfFirst { it.id == currentTrack.id }
         val nextIndex = PlaylistNavigation.nextIndex(activeSettings.playlistMode, index, list.size)
-        if (hadTemporarySubtitle) rebuildActiveSegments(activeSettings)
         if (nextIndex != null) list.getOrNull(nextIndex)?.let { openTrack(it) }
     }
 

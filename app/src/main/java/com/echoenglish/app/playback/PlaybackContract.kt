@@ -34,7 +34,6 @@ object PlaybackContract {
     const val EXTRA_CUE_TEXTS = "cue_texts"
     const val EXTRA_CUE_IDS = "cue_ids"
     const val EXTRA_BOOKMARKED_CUE_IDS = "bookmarked_cue_ids"
-    const val EXTRA_TEMPORARY_CUE_ID = "temporary_subtitle_cue_id"
     const val EXTRA_REPEATS = "repeats"
     const val EXTRA_GAP_MS = "segment_gap_ms"
     const val EXTRA_FOLLOW_ALONG = "follow_along_enabled"

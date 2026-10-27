@@ -2,6 +2,8 @@ package com.echoenglish.app.util
 
 import com.echoenglish.app.model.SrtCue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BookmarkSelectionTest {
@@ -22,15 +24,22 @@ class BookmarkSelectionTest {
         assertEquals(emptyList<SrtCue>(), BookmarkSelection.filter(cues, emptySet()))
     }
 
-    @Test fun temporaryLocationAddsOnlyTheSelectedCueWithoutChangingBookmarks() {
-        val bookmarks = setOf(10)
-        assertEquals(listOf(10, 20), BookmarkSelection.filter(cues, bookmarks, 20).map { it.index })
-        assertEquals(setOf(10), bookmarks)
+    @Test fun unbookmarkedCueCannotBeLocatedUntilUserBookmarksIt() {
+        val bookmarks = mutableSetOf(10)
+        assertFalse(BookmarkSelection.canLocate(20, bookmarks, bookmarksOnly = true))
         assertEquals(listOf(10), BookmarkSelection.filter(cues, bookmarks).map { it.index })
+        bookmarks.add(20)
+        assertTrue(BookmarkSelection.canLocate(20, bookmarks, bookmarksOnly = true))
+        assertEquals(listOf(10, 20), BookmarkSelection.filter(cues, bookmarks).map { it.index })
     }
 
-    @Test fun replacingTemporaryLocationDoesNotKeepOldTemporaryCues() {
-        assertEquals(listOf(10, 30), BookmarkSelection.filter(cues, setOf(10), 30).map { it.index })
-        assertEquals(listOf(10), BookmarkSelection.filter(cues, setOf(10), 10).map { it.index })
+    @Test fun bookmarkScopeAllowsExistingBookmarkButRejectsMissingCue() {
+        assertTrue(BookmarkSelection.canLocate(10, setOf(10), bookmarksOnly = true))
+        assertFalse(BookmarkSelection.canLocate(null, setOf(10), bookmarksOnly = true))
+    }
+
+    @Test fun otherPlaybackScopesDoNotRequireBookmarks() {
+        assertTrue(BookmarkSelection.canLocate(20, emptySet(), bookmarksOnly = false))
+        assertTrue(BookmarkSelection.canLocate(null, emptySet(), bookmarksOnly = false))
     }
 }
