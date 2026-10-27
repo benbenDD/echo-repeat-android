@@ -2,7 +2,7 @@
 
 回声复读是一款适用于语言学习、课程复习和音频精听的 Android 应用，支持播放列表文件夹、持久化播放列表、批量导入 MP3/SRT、按固定时长或字幕分段、字幕书签、仅播放书签字幕、分段重复、跟读模式、0.25×–2.0× 倍速、总进度与字幕定位、睡眠定时、媒体通知和锁屏后台播放。
 
-[下载 v2.2.2 APK 与查看更新说明](https://github.com/benbenDD/echo-repeat-android/releases/tag/v2.2.2)
+[下载 v2.3.0 APK 与查看更新说明](https://github.com/benbenDD/echo-repeat-android/releases/tag/v2.3.0) · [v2.2.4](https://github.com/benbenDD/echo-repeat-android/releases/tag/v2.2.4)
 
 ## v2.3.0 更新
 
